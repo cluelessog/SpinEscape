@@ -896,7 +896,7 @@ class Player {
         ctx.translate(this.x, this.y);
         
         const dotCount = 5;
-        const dotRadius = 5; // Small dots
+        const dotRadius = 5; // Reverted to original size
         const dotColor = this.hitFlash > 0 ? '#ff4444' : '#999999'; // Grey, red on hit
         
         ctx.fillStyle = dotColor;
@@ -950,12 +950,27 @@ class Projectile {
         this.vx = distance > 0 ? (dx / distance) * speed : 0;
         this.vy = distance > 0 ? (dy / distance) * speed : 0;
         
-        // Minimal design: White projectiles
-        this.color = '#ffffff';
+        // Trail system for fire effect
+        this.trail = [];
+        this.maxTrailLength = 10;
+        
+        // Color will be set based on distance in render()
+        this.color = '#ff3300'; // Default fire red
     }
     
     update(deltaTime) {
         if (!this.active) return;
+        
+        // Update trail: add current position
+        this.trail.push({x: this.x, y: this.y, time: 0});
+        if (this.trail.length > this.maxTrailLength) {
+            this.trail.shift();
+        }
+        
+        // Update trail times for fading
+        for (let i = 0; i < this.trail.length; i++) {
+            this.trail[i].time += deltaTime;
+        }
         
         // Velocity-based movement is now handled by Physics class in GameEngine
         // This method handles game-specific logic (dodged detection)
@@ -970,19 +985,99 @@ class Projectile {
         }
     }
     
-    render(ctx) {
+    /**
+     * Helper function to interpolate between two hex colors
+     */
+    interpolateColor(color1, color2, factor) {
+        // Clamp factor between 0 and 1
+        factor = Math.max(0, Math.min(1, factor));
+        
+        // Parse hex colors to RGB
+        const hex1 = color1.replace('#', '');
+        const hex2 = color2.replace('#', '');
+        const r1 = parseInt(hex1.substr(0, 2), 16);
+        const g1 = parseInt(hex1.substr(2, 2), 16);
+        const b1 = parseInt(hex1.substr(4, 2), 16);
+        const r2 = parseInt(hex2.substr(0, 2), 16);
+        const g2 = parseInt(hex2.substr(2, 2), 16);
+        const b2 = parseInt(hex2.substr(4, 2), 16);
+        
+        // Interpolate
+        const r = Math.round(r1 + (r2 - r1) * factor);
+        const g = Math.round(g1 + (g2 - g1) * factor);
+        const b = Math.round(b1 + (b2 - b1) * factor);
+        
+        // Convert back to hex
+        return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+    }
+    
+    render(ctx, playerX = null, playerY = null) {
         if (!this.active) return;
         
-        ctx.fillStyle = this.color;
+        // Calculate distance-based color if player position is provided
+        let projectileColor = this.color;
+        let glowIntensity = 10;
+        
+        if (playerX !== null && playerY !== null) {
+            const dx = this.x - playerX;
+            const dy = this.y - playerY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const normalizedDistance = Math.min(distance / 200, 1); // Normalize to 0-1 (200px = far)
+            
+            if (normalizedDistance > 0.5) {
+                // Far away (>100px): Fire red gradient
+                const farFactor = (normalizedDistance - 0.5) * 2; // 0 to 1 as distance goes from 100px to 200px
+                projectileColor = this.interpolateColor('#ff3300', '#ff6600', farFactor);
+            } else {
+                // Close (<100px): Transition from orange/yellow to bright white
+                const closeFactor = normalizedDistance * 2; // 0 to 1 as distance goes from 0px to 100px
+                projectileColor = this.interpolateColor('#ffaa00', '#ffffff', closeFactor);
+                // Increase glow intensity as projectile approaches
+                glowIntensity = 10 + (1 - normalizedDistance) * 20; // 10 to 30
+            }
+        }
+        
+        // Render fire trail
+        if (this.trail.length > 1) {
+            ctx.save();
+            for (let i = 0; i < this.trail.length - 1; i++) {
+                const point1 = this.trail[i];
+                const point2 = this.trail[i + 1];
+                
+                // Calculate alpha based on position in trail (fade from projectile to tail)
+                const alpha = (i / this.trail.length) * 0.8;
+                
+                // Fire color gradient: red -> orange -> yellow
+                let trailColor;
+                const trailFactor = i / this.trail.length;
+                if (trailFactor > 0.66) {
+                    trailColor = this.interpolateColor('#ff3300', '#ff6600', (trailFactor - 0.66) * 3);
+                } else if (trailFactor > 0.33) {
+                    trailColor = this.interpolateColor('#ff6600', '#ff8800', (trailFactor - 0.33) * 3);
+                } else {
+                    trailColor = this.interpolateColor('#ff8800', '#ffaa00', trailFactor * 3);
+                }
+                
+                ctx.strokeStyle = trailColor;
+                ctx.globalAlpha = alpha;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(point1.x, point1.y);
+                ctx.lineTo(point2.x, point2.y);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+        
+        // Render projectile with distance-based color
+        ctx.save();
+        ctx.fillStyle = projectileColor;
+        ctx.shadowBlur = glowIntensity;
+        ctx.shadowColor = projectileColor;
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
         ctx.fill();
-        
-        // Glow effect
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = this.color;
-        ctx.fill();
-        ctx.shadowBlur = 0;
+        ctx.restore();
     }
 }
 
@@ -1128,6 +1223,33 @@ class ParticleSystem {
     }
     
     /**
+     * Spawn diffusion effect - bright white particles expanding outward
+     * Used when projectiles pass through gaps
+     */
+    spawnDiffusion(x, y, count = 15, color = '#ffffff') {
+        for (let i = 0; i < count && this.activeParticleCount < this.maxParticles; i++) {
+            const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.3;
+            const speed = 80 + Math.random() * 40;
+            
+            const p = this.acquireParticle();
+            p.x = x;
+            p.y = y;
+            p.vx = Math.cos(angle) * speed;
+            p.vy = Math.sin(angle) * speed;
+            p.life = 0.6;
+            p.maxLife = 0.6;
+            p.size = 3 + Math.random() * 3;
+            p.color = color;
+            p.type = 'sparkle'; // Use sparkle type for star shape
+            p.rotation = Math.random() * Math.PI * 2;
+            p.rotationSpeed = (Math.random() - 0.5) * 20;
+            
+            this.particles.push(p);
+            this.activeParticleCount++;
+        }
+    }
+    
+    /**
      * Spawn spawn animation (when object appears)
      */
     spawnSpawnEffect(x, y, color = '#4a9eff') {
@@ -1270,6 +1392,8 @@ class ProjectilePool {
         if (index !== -1) {
             this.active.splice(index, 1);
             projectile.active = false;
+            // Clear trail when returning to pool
+            projectile.trail = [];
             // Return to pool for reuse
             this.pool.push(projectile);
         }
@@ -1288,10 +1412,10 @@ class ProjectilePool {
         }
     }
     
-    render(ctx) {
+    render(ctx, playerX = null, playerY = null) {
         // Render all active projectiles
         for (const projectile of this.active) {
-            projectile.render(ctx);
+            projectile.render(ctx, playerX, playerY);
         }
     }
     
@@ -1299,6 +1423,10 @@ class ProjectilePool {
         // Return all active projectiles to pool
         while (this.active.length > 0) {
             this.release(this.active[0]);
+        }
+        // Also clear trails for projectiles already in pool
+        for (const projectile of this.pool) {
+            projectile.trail = [];
         }
     }
     
@@ -2653,8 +2781,8 @@ class GameEngine {
         const finalPoints = Math.floor(basePoints * this.comboMultiplier * difficultyBonus);
         this.spawnFloatingScore(finalPoints, projectile.x, projectile.y);
         
-        // Particle effect for successful dodge
-        this.particleSystem.spawnExplosion(projectile.x, projectile.y, 8, '#0f0');
+        // Diffusion effect: bright white particles expanding outward when projectile passes through
+        this.particleSystem.spawnDiffusion(projectile.x, projectile.y, 20, '#ffffff');
         
         // Sparkle effect for combos (every 10 dodges)
         if (this.combo % 10 === 0 && this.combo > 0) {
@@ -2666,8 +2794,10 @@ class GameEngine {
     }
     
     handleCollision(projectile) {
-        // Trigger visual effects
-        this.particleSystem.spawnExplosion(projectile.x, projectile.y, 12);
+        // Enhanced explosion effect with more particles and fire colors
+        this.particleSystem.spawnExplosion(projectile.x, projectile.y, 25, '#ff3300');
+        // Secondary burst with orange/yellow particles
+        this.particleSystem.spawnExplosion(projectile.x, projectile.y, 15, '#ff8800');
         this.particleSystem.spawnDestroyEffect(projectile.x, projectile.y, '#ff4444');
         this.player.triggerHitFlash();
         this.screenShake = 0.3; // 300ms shake
@@ -3273,8 +3403,10 @@ class GameEngine {
         this.ctx.fillText(scoreText, GAME_WIDTH / 2, 100);
         this.ctx.restore();
         
-        // Render projectiles (using object pool)
-        this.projectilePool.render(this.ctx);
+        // Render projectiles (using object pool) - pass player position for distance-based colors
+        const playerX = this.player ? this.player.x : null;
+        const playerY = this.player ? this.player.y : null;
+        this.projectilePool.render(this.ctx, playerX, playerY);
         
         // Render player
         if (this.player) {
