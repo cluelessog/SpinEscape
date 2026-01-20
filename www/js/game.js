@@ -2315,6 +2315,21 @@ class GameEngine {
         this.maxProjectileSpeed = 500; // Maximum projectile speed
         this.difficultyInterpolationRate = 0.01; // How fast difficulty interpolates (1% per frame for very smooth transitions)
         
+        // Center shape absorption system for difficulty progression
+        const playerRadius = 66.125; // Player circle radius
+        this.centerShape = {
+            type: 0, // 0=circle, 1=square, 2=triangle, 3=pentagon
+            size: playerRadius * 0.22, // Starting size (22% of player radius ~14.5px)
+            maxSize: playerRadius * 0.8, // Maximum size (80% of player radius ~53px)
+            growthRate: (playerRadius * 0.8) * 0.08, // Growth per absorption (8% of maxSize ~4.2px, much faster growth)
+            startingSize: playerRadius * 0.22, // Starting size reference
+            x: GAME_WIDTH / 2, // Will be set to player center
+            y: GAME_HEIGHT / 2, // Will be set to player center
+            color: '#3fa8d4', // Darker shade of background
+            rotation: 0, // Rotation angle in radians
+            rotationSpeed: 0.75 // Rotation speed (rad/s, ~43 degrees per second)
+        };
+        
         // UI button tracking
         this.hoveredButton = null;
         
@@ -2598,6 +2613,9 @@ class GameEngine {
         // Update visual effects
         this.updateVisualEffects(deltaTime);
         
+        // Update center shape (rotation, position)
+        this.updateCenterShape(deltaTime);
+        
         // Update difficulty based on time (gradual increase)
         this.updateDifficulty(deltaTime);
     }
@@ -2735,6 +2753,12 @@ class GameEngine {
             const timeSinceSpawn = performance.now() - (projectile.spawnTime || 0);
             if (timeSinceSpawn < 200) continue;
             
+            // Check center shape collision first (before player circle)
+            if (this.checkCenterShapeCollision(projectile)) {
+                this.handleShapeAbsorption(projectile);
+                continue; // Skip player circle collision check
+            }
+            
             // Calculate distance from player center
             const dx = projectile.x - this.player.x;
             const dy = projectile.y - this.player.y;
@@ -2799,9 +2823,24 @@ class GameEngine {
                     // Projectile passes through if its diameter fits within gap width
                     // Add small tolerance (5%) for easier passage
                     if (projectileDiameter <= gapWidthAtDistance * 1.05) {
-                        // Passed through gap - dodged!
-                        this.handleDodge(projectile);
-                        // Don't break here - allow multiple dodges in same frame
+                        // Passed through gap - mark as passed but keep active to merge with center shape
+                        if (!projectile.dodged) {
+                            projectile.dodged = true; // Mark as passed through gap
+                            // Don't deactivate - let it continue to center shape for visual merge
+                            // Don't award points here - points will be awarded when it merges with center shape
+                            // Increment combo for passing through gap
+                            this.combo++;
+                            this.updateComboMultiplier();
+                            this.projectilesDodgedThisGame++;
+                            // Visual effects for passing through (no floating score yet)
+                            this.particleSystem.spawnDiffusion(projectile.x, projectile.y, 20, '#ffffff');
+                            // Sparkle effect for combos
+                            if (this.combo % 10 === 0 && this.combo > 0) {
+                                this.particleSystem.spawnSparkle(projectile.x, projectile.y, 12, '#ffd700');
+                            }
+                        }
+                        // Projectile continues moving - will merge with center shape when it reaches it
+                        // Don't break here - allow multiple passes in same frame
                     } else {
                         // Projectile too large for gap - might hit adjacent dots
                         // Check if it hits either adjacent dot
@@ -2997,6 +3036,347 @@ class GameEngine {
     }
     
     /**
+     * Render the center shape that absorbs projectiles
+     */
+    renderCenterShape() {
+        if (!this.player) return;
+        
+        const shape = this.centerShape;
+        const ctx = this.ctx;
+        
+        // Update shape position to match player center
+        shape.x = this.player.x;
+        shape.y = this.player.y;
+        
+        ctx.save();
+        
+        // Translate to shape center and rotate
+        ctx.translate(shape.x, shape.y);
+        ctx.rotate(shape.rotation);
+        
+        // Add subtle glow effect
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = shape.color;
+        ctx.fillStyle = shape.color;
+        ctx.globalAlpha = 0.85;
+        
+        ctx.beginPath();
+        
+        switch (shape.type) {
+            case 0: // Circle
+                ctx.arc(0, 0, shape.size, 0, Math.PI * 2);
+                break;
+                
+            case 1: // Square
+                const halfSize = shape.size / 2;
+                ctx.fillRect(-halfSize, -halfSize, shape.size, shape.size);
+                break;
+                
+            case 2: // Triangle
+                const triangleSize = shape.size;
+                const triangleHeight = triangleSize * Math.sqrt(3) / 2;
+                ctx.moveTo(0, -triangleHeight * 0.67); // Top vertex
+                ctx.lineTo(-triangleSize / 2, triangleHeight * 0.33); // Bottom left
+                ctx.lineTo(triangleSize / 2, triangleHeight * 0.33); // Bottom right
+                ctx.closePath();
+                break;
+                
+            case 3: // Pentagon
+                const pentagonSize = shape.size;
+                for (let i = 0; i < 5; i++) {
+                    const angle = (i * Math.PI * 2 / 5) - (Math.PI / 2); // Start from top
+                    const x = Math.cos(angle) * pentagonSize;
+                    const y = Math.sin(angle) * pentagonSize;
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.closePath();
+                break;
+        }
+        
+        ctx.fill();
+        ctx.restore();
+        
+        // Reset shadow and alpha
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1.0;
+    }
+    
+    /**
+     * Check if projectile collides with center shape
+     * @param {Object} projectile - Projectile object
+     * @returns {boolean} True if projectile hits center shape
+     */
+    checkCenterShapeCollision(projectile) {
+        const shape = this.centerShape;
+        const dx = projectile.x - shape.x;
+        const dy = projectile.y - shape.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const projectileRadius = projectile.radius;
+        
+        switch (shape.type) {
+            case 0: // Circle
+                return distance <= shape.size + projectileRadius;
+                
+            case 1: // Square (accounting for rotation)
+                // Rotate point back to square's local space
+                const angle = -shape.rotation;
+                const cos = Math.cos(angle);
+                const sin = Math.sin(angle);
+                const localX = dx * cos - dy * sin;
+                const localY = dx * sin + dy * cos;
+                
+                // Check if point is within square bounds (with projectile radius margin)
+                const halfSize = shape.size / 2 + projectileRadius;
+                return Math.abs(localX) <= halfSize && Math.abs(localY) <= halfSize;
+                
+            case 2: // Triangle
+                // Point-in-triangle test using barycentric coordinates
+                const triangleSize = shape.size;
+                const triangleHeight = triangleSize * Math.sqrt(3) / 2;
+                
+                // Triangle vertices (in local rotated space)
+                const v1 = { x: 0, y: -triangleHeight * 0.67 };
+                const v2 = { x: -triangleSize / 2, y: triangleHeight * 0.33 };
+                const v3 = { x: triangleSize / 2, y: triangleHeight * 0.33 };
+                
+                // Rotate point to triangle's local space
+                const triAngle = -shape.rotation;
+                const triCos = Math.cos(triAngle);
+                const triSin = Math.sin(triAngle);
+                const localPX = dx * triCos - dy * triSin;
+                const localPY = dx * triSin + dy * triCos;
+                
+                // Barycentric coordinates
+                const denom = (v2.y - v3.y) * (v1.x - v3.x) + (v3.x - v2.x) * (v1.y - v3.y);
+                const a = ((v2.y - v3.y) * (localPX - v3.x) + (v3.x - v2.x) * (localPY - v3.y)) / denom;
+                const b = ((v3.y - v1.y) * (localPX - v3.x) + (v1.x - v3.x) * (localPY - v3.y)) / denom;
+                const c = 1 - a - b;
+                
+                // Check if point is inside triangle (with margin for projectile radius)
+                if (a >= -0.1 && b >= -0.1 && c >= -0.1) {
+                    return true;
+                }
+                
+                // Check distance to edges (accounting for projectile radius)
+                const distToEdge = Math.min(
+                    this.distanceToLineSegment(localPX, localPY, v1, v2),
+                    this.distanceToLineSegment(localPX, localPY, v2, v3),
+                    this.distanceToLineSegment(localPX, localPY, v3, v1)
+                );
+                return distToEdge <= projectileRadius;
+                
+            case 3: // Pentagon
+                // Point-in-pentagon test using ray-casting
+                const pentagonSize = shape.size;
+                const pentAngle = -shape.rotation;
+                const pentCos = Math.cos(pentAngle);
+                const pentSin = Math.sin(pentAngle);
+                const pentLocalX = dx * pentCos - dy * pentSin;
+                const pentLocalY = dx * pentSin + dy * pentCos;
+                
+                // Get pentagon vertices
+                const pentVertices = [];
+                for (let i = 0; i < 5; i++) {
+                    const vAngle = (i * Math.PI * 2 / 5) - (Math.PI / 2);
+                    pentVertices.push({
+                        x: Math.cos(vAngle) * pentagonSize,
+                        y: Math.sin(vAngle) * pentagonSize
+                    });
+                }
+                
+                // Ray-casting algorithm
+                let inside = false;
+                for (let i = 0, j = 4; i < 5; j = i++) {
+                    const vi = pentVertices[i];
+                    const vj = pentVertices[j];
+                    if (((vi.y > pentLocalY) !== (vj.y > pentLocalY)) &&
+                        (pentLocalX < (vj.x - vi.x) * (pentLocalY - vi.y) / (vj.y - vi.y) + vi.x)) {
+                        inside = !inside;
+                    }
+                }
+                
+                if (inside) return true;
+                
+                // Check distance to edges (accounting for projectile radius)
+                let minDist = Infinity;
+                for (let i = 0; i < 5; i++) {
+                    const v1 = pentVertices[i];
+                    const v2 = pentVertices[(i + 1) % 5];
+                    const dist = this.distanceToLineSegment(pentLocalX, pentLocalY, v1, v2);
+                    minDist = Math.min(minDist, dist);
+                }
+                return minDist <= projectileRadius;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Calculate distance from point to line segment
+     * @param {number} px - Point X
+     * @param {number} py - Point Y
+     * @param {Object} v1 - Line segment start {x, y}
+     * @param {Object} v2 - Line segment end {x, y}
+     * @returns {number} Distance to line segment
+     */
+    distanceToLineSegment(px, py, v1, v2) {
+        const dx = v2.x - v1.x;
+        const dy = v2.y - v1.y;
+        const length2 = dx * dx + dy * dy;
+        
+        if (length2 === 0) {
+            // v1 and v2 are the same point
+            return Math.sqrt((px - v1.x) * (px - v1.x) + (py - v1.y) * (py - v1.y));
+        }
+        
+        const t = Math.max(0, Math.min(1, ((px - v1.x) * dx + (py - v1.y) * dy) / length2));
+        const projX = v1.x + t * dx;
+        const projY = v1.y + t * dy;
+        
+        return Math.sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
+    }
+    
+    /**
+     * Handle projectile absorption by center shape
+     * @param {Object} projectile - Projectile that was absorbed
+     */
+    handleShapeAbsorption(projectile) {
+        const shape = this.centerShape;
+        
+        // Visual merge effect: create particles that trail from projectile to center shape
+        // This creates the illusion of the projectile merging into the shape
+        const particleCount = 18;
+        const dx = shape.x - projectile.x;
+        const dy = shape.y - projectile.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance > 0) {
+            // Create particles that move from projectile toward center shape
+            for (let i = 0; i < particleCount && this.particleSystem.activeParticleCount < this.particleSystem.maxParticles; i++) {
+                const t = i / particleCount; // 0 to 1
+                // Start particles along the path from projectile to center (closer to projectile)
+                const startX = projectile.x + (dx * t * 0.25);
+                const startY = projectile.y + (dy * t * 0.25);
+                
+                // Calculate direction toward center shape
+                const dirX = dx / distance;
+                const dirY = dy / distance;
+                
+                // Add slight random spread for more natural look
+                const spread = (Math.random() - 0.5) * 0.2;
+                const perpX = -dirY * spread;
+                const perpY = dirX * spread;
+                
+                // Create particle moving toward center
+                const p = this.particleSystem.acquireParticle();
+                p.x = startX + perpX;
+                p.y = startY + perpY;
+                p.vx = (dirX + perpX * 0.3) * 350; // Faster speed toward center for merge effect
+                p.vy = (dirY + perpY * 0.3) * 350;
+                p.life = 0.35; // Lifetime to reach center
+                p.maxLife = 0.35;
+                p.size = 4 + Math.random() * 3; // Larger particles for visibility
+                p.color = shape.color;
+                p.type = 'absorption';
+                p.rotation = 0;
+                p.rotationSpeed = 0;
+                
+                // Add to active particles
+                this.particleSystem.particles.push(p);
+                this.particleSystem.activeParticleCount++;
+            }
+        }
+        
+        // Increase shape size
+        shape.size += shape.growthRate;
+        shape.size = Math.min(shape.size, shape.maxSize);
+        
+        // Award points for merging projectile with center shape (using same base points as dodges)
+        const basePoints = 10; // Same base points as dodges
+        this.addScore(basePoints);
+        const finalPoints = Math.floor(basePoints * this.comboMultiplier);
+        
+        // Show floating score at top right of screen (instead of at player circle)
+        const topRightX = GAME_WIDTH - 100; // 100px from right edge
+        const topRightY = 120; // 120px from top
+        this.spawnFloatingScore(finalPoints, topRightX, topRightY, true); // true = isMergeScore
+        
+        // Deactivate projectile
+        projectile.active = false;
+        projectile.dodged = false; // Not a dodge, it was absorbed
+        
+        // Additional visual effect: subtle glow pulse at center shape
+        this.particleSystem.spawnDiffusion(shape.x, shape.y, 6, shape.color);
+        
+        // Check if shape reached threshold (80% of player circle radius)
+        const threshold = this.player.radius * 0.8;
+        if (shape.size >= threshold) {
+            this.triggerDifficultyIncrease();
+        }
+        
+        // Return projectile to pool
+        this.projectilePool.release(projectile);
+    }
+    
+    /**
+     * Trigger difficulty increase when shape reaches threshold
+     */
+    triggerDifficultyIncrease() {
+        const shape = this.centerShape;
+        
+        // Increase difficulty multiplier
+        // Add 0.2 to difficulty multiplier (20% increase)
+        this.difficultyMultiplier = Math.min(
+            this.maxDifficultyMultiplier,
+            this.difficultyMultiplier + 0.2
+        );
+        
+        // Cycle to next shape type
+        this.cycleShapeType();
+        
+        // Visual feedback: particle burst at center
+        this.particleSystem.spawnExplosion(shape.x, shape.y, 20, shape.color);
+        
+        // Optional: screen flash effect
+        this.flashEffect = 0.15; // 150ms flash
+    }
+    
+    /**
+     * Cycle to next shape type
+     */
+    cycleShapeType() {
+        const shape = this.centerShape;
+        shape.type = (shape.type + 1) % 4; // Cycle through 0-3
+        shape.size = shape.startingSize; // Reset size
+        shape.rotation = 0; // Reset rotation (optional, can keep it)
+    }
+    
+    /**
+     * Update center shape (rotation, etc.)
+     * @param {number} deltaTime - Time since last frame
+     */
+    updateCenterShape(deltaTime) {
+        const shape = this.centerShape;
+        
+        // Update rotation
+        shape.rotation += shape.rotationSpeed * deltaTime;
+        
+        // Normalize rotation to [0, 2π] range
+        while (shape.rotation > Math.PI * 2) shape.rotation -= Math.PI * 2;
+        while (shape.rotation < 0) shape.rotation += Math.PI * 2;
+        
+        // Update shape position to match player center
+        if (this.player) {
+            shape.x = this.player.x;
+            shape.y = this.player.y;
+        }
+    }
+    
+    /**
      * Render the circular joystick control
      */
     renderSlider() {
@@ -3081,7 +3461,7 @@ class GameEngine {
         this.checkAchievements();
     }
     
-    spawnFloatingScore(points, x, y) {
+    spawnFloatingScore(points, x, y, isMergeScore = false) {
         // Determine color based on combo multiplier
         let color = '#ffd700'; // Gold default
         let fontSize = 36;
@@ -3097,19 +3477,26 @@ class GameEngine {
             fontSize = 38;
         }
         
+        // For merge scores at top right: stay more stationary, flash more
+        const velocityY = isMergeScore ? -40 : -120; // Less upward movement for merge scores
+        const velocityX = isMergeScore ? (Math.random() - 0.5) * 10 : (Math.random() - 0.5) * 30; // Less drift for merge scores
+        const maxScale = isMergeScore ? 1.5 : 1.2; // Bigger flash for merge scores
+        const life = isMergeScore ? 1.0 : 1.2; // Slightly shorter for merge scores
+        
         this.floatingScores.push({
             x: x,
             y: y,
             text: `+${points}`,
-            life: 1.2, // 1.2 seconds
-            maxLife: 1.2,
-            velocityY: -120, // Move upward faster
-            velocityX: (Math.random() - 0.5) * 30, // Slight horizontal drift
+            life: life,
+            maxLife: life,
+            velocityY: velocityY,
+            velocityX: velocityX,
             alpha: 1.0,
             scale: 0.5, // Start small
-            maxScale: 1.2, // Grow then shrink
+            maxScale: maxScale, // Grow then shrink (bigger for merge scores)
             color: color,
-            fontSize: fontSize
+            fontSize: fontSize,
+            isMergeScore: isMergeScore // Flag for special rendering
         });
     }
     
@@ -3124,14 +3511,14 @@ class GameEngine {
             floating.velocityY *= 0.98; // Slow down over time
             floating.velocityX *= 0.95;
             
-            // Scale animation: grow then shrink
+            // Scale animation: grow then shrink (flash effect)
             const lifeRatio = floating.life / floating.maxLife;
             if (lifeRatio > 0.5) {
-                // Growing phase
-                floating.scale = 0.5 + (1 - lifeRatio) * 1.4; // 0.5 to 1.2
+                // Growing phase: scale from 0.5 to maxScale
+                floating.scale = 0.5 + (1 - lifeRatio) * (floating.maxScale - 0.5) * 2;
             } else {
-                // Shrinking phase
-                floating.scale = 0.5 + lifeRatio * 0.7; // 1.2 to 0.5
+                // Shrinking phase: scale from maxScale to 0.5
+                floating.scale = 0.5 + lifeRatio * (floating.maxScale - 0.5) * 2;
             }
             
             // Fade out
@@ -3537,6 +3924,9 @@ class GameEngine {
             this.player.render(this.ctx);
         }
         
+        // Render center shape (after player circle, before projectiles)
+        this.renderCenterShape();
+        
         // Render particles
         this.particleSystem.render(this.ctx);
         
@@ -3736,6 +4126,11 @@ class GameEngine {
         
         // Reset time-based difficulty
         this.difficultyMultiplier = 1.0;
+        
+        // Reset center shape
+        this.centerShape.type = 0; // Start with circle
+        this.centerShape.size = this.centerShape.startingSize;
+        this.centerShape.rotation = 0;
         
         // Reset joystick state
         this.sliderAngle = 0;
