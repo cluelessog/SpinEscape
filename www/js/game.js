@@ -790,7 +790,7 @@ class Player {
     constructor(x, y) {
         this.x = x;
         this.y = y;
-        this.radius = 30;
+        this.radius = 50; // Increased from 30 to make circle wider
         this.angle = 0; // Rotation angle in radians
         this.rotationSpeed = 0; // Radians per second
         this.maxRotationSpeed = 5; // Maximum rotation speed
@@ -799,17 +799,19 @@ class Player {
         this.hitFlash = 0; // Flash effect timer
         
         // Gap system: Define gap sectors (angles where projectiles can pass through)
-        // Each gap is defined as [startAngle, endAngle] in radians (relative to rotation)
-        // The circle has 4 gaps, each 45 degrees (PI/4 radians) wide
-        // Solid sectors are between gaps
-        this.gapCount = 4; // Number of gaps
-        this.gapSize = Math.PI / 4; // Each gap is 45 degrees (PI/4 radians)
-        this.solidSize = (Math.PI * 2 - (this.gapCount * this.gapSize)) / this.gapCount; // Size of solid sectors
+        // With 5 dots, we have 5 gaps between them (projectiles pass between dots)
+        // Each gap is between two dots, so gaps are evenly spaced
+        this.gapCount = 5; // Number of gaps (matches 5 dots)
+        this.gapSize = Math.PI / 6; // Each gap is 30 degrees (PI/6 radians) - wide enough for projectiles
+        this.solidSize = (Math.PI * 2 - (this.gapCount * this.gapSize)) / this.gapCount; // Size of solid sectors (dots)
         
         // Calculate gap positions (relative to angle 0)
+        // Gaps are positioned between dots, so offset by half the dot spacing
         this.gaps = [];
+        const dotSpacing = Math.PI * 2 / 5; // 5 dots evenly spaced
         for (let i = 0; i < this.gapCount; i++) {
-            const gapStart = (Math.PI * 2 / this.gapCount) * i;
+            // Gap starts between dot i and dot i+1
+            const gapStart = (i * dotSpacing) + (dotSpacing / 2) - (this.gapSize / 2);
             const gapEnd = gapStart + this.gapSize;
             this.gaps.push([gapStart, gapEnd]);
         }
@@ -889,46 +891,28 @@ class Player {
     }
     
     render(ctx) {
-        // Draw player circle with gaps
+        // Minimal design: Draw 5 grey dots arranged in a perfect circle
         ctx.save();
         ctx.translate(this.x, this.y);
-        ctx.rotate(this.angle);
         
-        // Flash effect on hit
-        const fillColor = this.hitFlash > 0 ? '#ff4444' : this.color;
+        const dotCount = 5;
+        const dotRadius = 5; // Small dots
+        const dotColor = this.hitFlash > 0 ? '#ff4444' : '#999999'; // Grey, red on hit
         
-        // Draw solid sectors (arcs between gaps)
-        ctx.fillStyle = fillColor;
+        ctx.fillStyle = dotColor;
         
-        // Draw each solid sector as a filled arc
-        for (let i = 0; i < this.gapCount; i++) {
-            const gapEnd = this.gaps[i][1];
-            const nextGapStart = i < this.gaps.length - 1 ? this.gaps[i + 1][0] : this.gaps[0][0] + Math.PI * 2;
+        // Draw each dot arranged in a circle
+        for (let i = 0; i < dotCount; i++) {
+            // Calculate angle for each dot (evenly spaced around circle)
+            const angle = (i * Math.PI * 2 / dotCount) + this.angle;
+            const dotX = Math.cos(angle) * this.radius;
+            const dotY = Math.sin(angle) * this.radius;
             
-            // Calculate solid sector angles
-            let solidStart = gapEnd;
-            let solidEnd = nextGapStart;
-            
-            // Handle wrap-around
-            if (solidEnd < solidStart) {
-                solidEnd += Math.PI * 2;
-            }
-            
-            // Draw arc for this solid sector
+            // Draw circle for this dot
             ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.arc(0, 0, this.radius, solidStart, solidEnd);
-            ctx.closePath();
+            ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
             ctx.fill();
         }
-        
-        // Draw indicator line showing rotation (points to 0 angle, which is a gap edge)
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(this.radius, 0);
-        ctx.stroke();
         
         ctx.restore();
     }
@@ -953,7 +937,7 @@ class Projectile {
         this.y = y;
         this.targetX = targetX;
         this.targetY = targetY;
-        this.radius = 12;
+        this.radius = 18; // Increased from 12 to make projectiles more visible
         this.speed = speed;
         this.active = true;
         this.dodged = false; // Track if projectile was dodged
@@ -966,9 +950,8 @@ class Projectile {
         this.vx = distance > 0 ? (dx / distance) * speed : 0;
         this.vy = distance > 0 ? (dy / distance) * speed : 0;
         
-        // Color based on speed (faster = redder)
-        const speedRatio = Math.min(speed / 400, 1);
-        this.color = `rgb(${255}, ${255 - Math.floor(speedRatio * 200)}, ${255 - Math.floor(speedRatio * 255)})`;
+        // Minimal design: White projectiles
+        this.color = '#ffffff';
     }
     
     update(deltaTime) {
@@ -3247,21 +3230,48 @@ class GameEngine {
     }
     
     renderPlaying() {
-        // Background grid (subtle visual reference)
-        this.ctx.strokeStyle = '#2a2a3e';
-        this.ctx.lineWidth = 1;
-        for (let x = 0; x < GAME_WIDTH; x += 100) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(x, 0);
-            this.ctx.lineTo(x, GAME_HEIGHT);
-            this.ctx.stroke();
+        // Minimal design: Dark background (draw FIRST before everything else)
+        this.ctx.fillStyle = '#0A0E27';
+        this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        
+        // Draw white phone frame with rounded corners
+        const frameMargin = 20;
+        const frameRadius = 25;
+        const frameX = frameMargin;
+        const frameY = frameMargin;
+        const frameWidth = GAME_WIDTH - (frameMargin * 2);
+        const frameHeight = GAME_HEIGHT - (frameMargin * 2);
+        
+        this.ctx.strokeStyle = '#ffffff';
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        // Use roundRect if available, otherwise draw manually
+        if (this.ctx.roundRect) {
+            this.ctx.roundRect(frameX, frameY, frameWidth, frameHeight, frameRadius);
+        } else {
+            // Fallback: draw rounded rectangle manually
+            this.ctx.moveTo(frameX + frameRadius, frameY);
+            this.ctx.lineTo(frameX + frameWidth - frameRadius, frameY);
+            this.ctx.quadraticCurveTo(frameX + frameWidth, frameY, frameX + frameWidth, frameY + frameRadius);
+            this.ctx.lineTo(frameX + frameWidth, frameY + frameHeight - frameRadius);
+            this.ctx.quadraticCurveTo(frameX + frameWidth, frameY + frameHeight, frameX + frameWidth - frameRadius, frameY + frameHeight);
+            this.ctx.lineTo(frameX + frameRadius, frameY + frameHeight);
+            this.ctx.quadraticCurveTo(frameX, frameY + frameHeight, frameX, frameY + frameHeight - frameRadius);
+            this.ctx.lineTo(frameX, frameY + frameRadius);
+            this.ctx.quadraticCurveTo(frameX, frameY, frameX + frameRadius, frameY);
+            this.ctx.closePath();
         }
-        for (let y = 0; y < GAME_HEIGHT; y += 100) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, y);
-            this.ctx.lineTo(GAME_WIDTH, y);
-            this.ctx.stroke();
-        }
+        this.ctx.stroke();
+        
+        // Minimal score display: single number, centered, white, monospaced font
+        this.ctx.save();
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.font = 'bold 60px "Courier New", monospace';
+        this.ctx.textAlign = 'center';
+        // Use displayScore for animated roll-up effect
+        const scoreText = Math.floor(this.displayScore).toLocaleString();
+        this.ctx.fillText(scoreText, GAME_WIDTH / 2, 100);
+        this.ctx.restore();
         
         // Render projectiles (using object pool)
         this.projectilePool.render(this.ctx);
@@ -3276,105 +3286,6 @@ class GameEngine {
         
         // Render floating scores
         this.renderFloatingScores();
-        
-        // Visual feedback: touch points show as small circles while pressed
-        const allTouches = this.inputManager.getAllTouches();
-        for (let i = 0; i < allTouches.length; i++) {
-            const touch = allTouches[i];
-            // Primary touch (first) is brighter
-            const alpha = i === 0 ? 0.7 : 0.4;
-            this.ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-            this.ctx.beginPath();
-            this.ctx.arc(touch.x, touch.y, 20, 0, Math.PI * 2);
-            this.ctx.fill();
-            
-            // Show touch number for multi-touch debugging
-            if (allTouches.length > 1) {
-                this.ctx.fillStyle = '#fff';
-                this.ctx.font = 'bold 14px Arial';
-                this.ctx.textAlign = 'center';
-                this.ctx.textBaseline = 'middle';
-                this.ctx.fillText((i + 1).toString(), touch.x, touch.y);
-            }
-        }
-        
-        // Visual feedback: show pinch gesture if detected
-        const pinch = this.inputManager.detectPinch();
-        if (pinch && pinch.touches && pinch.touches.length >= 2 && pinch.center) {
-            // Draw line between two touches
-            const touches = pinch.touches;
-            // Safety check: ensure touches exist
-            if (touches[0] && touches[1]) {
-                this.ctx.strokeStyle = 'rgba(255, 255, 0, 0.6)';
-                this.ctx.lineWidth = 2;
-                this.ctx.beginPath();
-                this.ctx.moveTo(touches[0].x, touches[0].y);
-                this.ctx.lineTo(touches[1].x, touches[1].y);
-                this.ctx.stroke();
-                
-                // Draw center point
-                this.ctx.fillStyle = 'rgba(255, 255, 0, 0.8)';
-                this.ctx.beginPath();
-                this.ctx.arc(pinch.center.x, pinch.center.y, 8, 0, Math.PI * 2);
-                this.ctx.fill();
-                
-                // Show distance (for debugging)
-                this.ctx.fillStyle = '#ff0';
-                this.ctx.font = '12px Arial';
-                this.ctx.textAlign = 'center';
-                this.ctx.fillText(`${Math.floor(pinch.distance)}px`, pinch.center.x, pinch.center.y - 15);
-            }
-        }
-        
-        // Draw gameplay HUD background with theme
-        const theme = this.themeManager.getTheme();
-        const hudGradient = this.themeManager.createGradient(
-            this.ctx, 0, 0, 0, 200,
-            ['rgba(26, 26, 46, 0.95)', 'rgba(26, 26, 46, 0.85)']
-        );
-        this.ctx.fillStyle = hudGradient;
-        this.ctx.fillRect(0, 0, GAME_WIDTH, 200);
-        
-        // HUD - Score (60px font as per requirements) with glow
-        this.ctx.save();
-        this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
-        this.ctx.shadowBlur = 15;
-        this.ctx.shadowOffsetX = 0;
-        this.ctx.shadowOffsetY = 0;
-        this.ctx.fillStyle = theme.colors.text || '#fff';
-        this.ctx.font = 'bold 60px Arial';
-        this.ctx.textAlign = 'center';
-        // Use displayScore for animated roll-up effect
-        const scoreText = Math.floor(this.displayScore).toLocaleString();
-        this.ctx.fillText(`Score: ${scoreText}`, GAME_WIDTH / 2, 80);
-        this.ctx.restore();
-        
-        // Combo multiplier display with enhanced styling
-        if (this.comboMultiplier > 1) {
-            this.ctx.save();
-            this.ctx.shadowColor = theme.colors.warning || '#ffd700';
-            this.ctx.shadowBlur = 20;
-            this.ctx.fillStyle = theme.colors.warning || '#ffd700';
-            this.ctx.font = 'bold 32px Arial';
-            this.ctx.fillText(`${this.comboMultiplier}x COMBO!`, GAME_WIDTH / 2, 130);
-            this.ctx.restore();
-            
-            this.ctx.save();
-            this.ctx.fillStyle = theme.colors.text || '#fff';
-            this.ctx.font = '24px Arial';
-            this.ctx.fillText(`Dodges: ${this.combo}`, GAME_WIDTH / 2, 160);
-            this.ctx.restore();
-        }
-        
-        // Level/Difficulty indicator (top-left) with theme colors
-        const difficultyLevel = Math.floor(this.score / 500);
-        this.ctx.save();
-        this.ctx.fillStyle = theme.colors.textSecondary || '#aaa';
-        this.ctx.font = '20px Arial';
-        this.ctx.textAlign = 'left';
-        this.ctx.fillText(`Level: ${difficultyLevel + 1}`, 20, 30);
-        this.ctx.fillText(`Difficulty: ${this.difficulty.toUpperCase()}`, 20, 55);
-        this.ctx.restore();
     }
     
     renderPaused() {

@@ -10,7 +10,7 @@ html, body {
     height: 100%;
     overflow: hidden;
     position: fixed;
-    background-color: #000;
+    background-color: #0A0E27;
     touch-action: none;
     -webkit-touch-callout: none;
     -webkit-user-select: none;
@@ -24,7 +24,7 @@ html, body {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background-color: #1a1a2e;
+    background-color: #0A0E27;
     touch-action: none;
     -webkit-tap-highlight-color: transparent;
 }
