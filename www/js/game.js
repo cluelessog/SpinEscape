@@ -950,27 +950,12 @@ class Projectile {
         this.vx = distance > 0 ? (dx / distance) * speed : 0;
         this.vy = distance > 0 ? (dy / distance) * speed : 0;
         
-        // Trail system for fire effect
-        this.trail = [];
-        this.maxTrailLength = 10;
-        
         // Color will be set based on distance in render()
         this.color = '#ff3300'; // Default fire red
     }
     
     update(deltaTime) {
         if (!this.active) return;
-        
-        // Update trail: add current position
-        this.trail.push({x: this.x, y: this.y, time: 0});
-        if (this.trail.length > this.maxTrailLength) {
-            this.trail.shift();
-        }
-        
-        // Update trail times for fading
-        for (let i = 0; i < this.trail.length; i++) {
-            this.trail[i].time += deltaTime;
-        }
         
         // Velocity-based movement is now handled by Physics class in GameEngine
         // This method handles game-specific logic (dodged detection)
@@ -1035,38 +1020,6 @@ class Projectile {
                 // Increase glow intensity as projectile approaches
                 glowIntensity = 10 + (1 - normalizedDistance) * 20; // 10 to 30
             }
-        }
-        
-        // Render fire trail
-        if (this.trail.length > 1) {
-            ctx.save();
-            for (let i = 0; i < this.trail.length - 1; i++) {
-                const point1 = this.trail[i];
-                const point2 = this.trail[i + 1];
-                
-                // Calculate alpha based on position in trail (fade from projectile to tail)
-                const alpha = (i / this.trail.length) * 0.8;
-                
-                // Fire color gradient: red -> orange -> yellow
-                let trailColor;
-                const trailFactor = i / this.trail.length;
-                if (trailFactor > 0.66) {
-                    trailColor = this.interpolateColor('#ff3300', '#ff6600', (trailFactor - 0.66) * 3);
-                } else if (trailFactor > 0.33) {
-                    trailColor = this.interpolateColor('#ff6600', '#ff8800', (trailFactor - 0.33) * 3);
-                } else {
-                    trailColor = this.interpolateColor('#ff8800', '#ffaa00', trailFactor * 3);
-                }
-                
-                ctx.strokeStyle = trailColor;
-                ctx.globalAlpha = alpha;
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(point1.x, point1.y);
-                ctx.lineTo(point2.x, point2.y);
-                ctx.stroke();
-            }
-            ctx.restore();
         }
         
         // Render projectile with distance-based color
@@ -1392,8 +1345,6 @@ class ProjectilePool {
         if (index !== -1) {
             this.active.splice(index, 1);
             projectile.active = false;
-            // Clear trail when returning to pool
-            projectile.trail = [];
             // Return to pool for reuse
             this.pool.push(projectile);
         }
@@ -1423,10 +1374,6 @@ class ProjectilePool {
         // Return all active projectiles to pool
         while (this.active.length > 0) {
             this.release(this.active[0]);
-        }
-        // Also clear trails for projectiles already in pool
-        for (const projectile of this.pool) {
-            projectile.trail = [];
         }
     }
     
@@ -2570,19 +2517,6 @@ class GameEngine {
         for (const projectile of activeProjectiles) {
             if (!projectile.active) continue;
             
-            // Spawn trail effect for moving projectiles
-            if (projectile.vx !== 0 || projectile.vy !== 0) {
-                const trailColor = this.getProjectileTrailColor(projectile);
-                this.particleSystem.spawnTrail(
-                    projectile.x, 
-                    projectile.y, 
-                    projectile.vx, 
-                    projectile.vy, 
-                    trailColor, 
-                    2
-                );
-            }
-            
             // Update velocity-based movement using Physics class
             this.physics.updateVelocity(projectile, deltaTime);
             
@@ -2692,18 +2626,6 @@ class GameEngine {
     /**
      * Get trail color based on projectile speed
      */
-    getProjectileTrailColor(projectile) {
-        const speed = Math.sqrt(projectile.vx * projectile.vx + projectile.vy * projectile.vy);
-        // Faster projectiles = brighter/more intense color
-        if (speed > 300) {
-            return '#ff0080'; // Hot pink for fast
-        } else if (speed > 200) {
-            return '#ff4444'; // Red for medium-fast
-        } else {
-            return '#4a9eff'; // Blue for normal
-        }
-    }
-    
     checkCollisions() {
         if (!this.player) return;
         
