@@ -1,0 +1,55 @@
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="com.psstudio.spinescape" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+    <name>Spin Escape</name>
+    <description>
+        A hyper-casual Android game where you rotate a circle to dodge incoming projectiles.
+    </description>
+    <author email="dev@psstudio.com" href="https://psstudio.com">
+        PS Studio
+    </author>
+    
+    <content src="index.html" />
+    
+    <!-- Android Configuration -->
+    <platform name="android">
+        <!-- Target Android 9+ (API 28+) -->
+        <preference name="android-minSdkVersion" value="28" />
+        <preference name="android-targetSdkVersion" value="35" />
+        <preference name="android-compileSdkVersion" value="35" />
+        
+        <!-- App orientation (portrait for this game) -->
+        <preference name="orientation" value="portrait" />
+        
+        <!-- Fullscreen and display preferences -->
+        <preference name="Fullscreen" value="true" />
+        <preference name="StatusBarStyle" value="lightcontent" />
+        <preference name="StatusBarBackgroundColor" value="#000000" />
+        
+        <!-- Hardware acceleration (enabled by default on Android 5+) -->
+        <preference name="android-hardwareacceleration" value="true" />
+        
+        <!-- Disable keyboard display -->
+        <preference name="KeyboardDisplayRequiresUserAction" value="false" />
+        
+        <!-- Allow all intents for web content -->
+        <allow-intent href="http://*/*" />
+        <allow-intent href="https://*/*" />
+    </platform>
+    
+    <!-- Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    
+    <!-- Features -->
+    <feature name="http://api.phonegap.com/plugins/media" />
+    
+    <!-- Icons and splash screens will be added later -->
+    <icon src="res/icon/android/icon-96-xhdpi.png" />
+    
+    <!-- Allow navigation -->
+    <allow-navigation href="*" />
+    
+    <!-- Access origins -->
+    <access origin="*" />
+</widget>
