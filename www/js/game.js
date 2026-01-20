@@ -852,40 +852,40 @@ class Player {
         return true; // Solid part
     }
     
-    update(deltaTime, inputManager) {
-        // Handle rotation input
-        const touch = inputManager.getPrimaryTouch();
-        if (touch) {
-            // Calculate angle from center to touch point
-            const dx = touch.x - this.x;
-            const dy = touch.y - this.y;
-            const targetAngle = Math.atan2(dy, dx);
+    update(deltaTime, sliderAngle) {
+        // Handle rotation input from slider
+        // sliderAngle is passed directly from GameEngine (null if slider not active)
+        if (sliderAngle !== null && sliderAngle !== undefined) {
+            // Smooth interpolation to slider angle for smooth movement
+            let angleDiff = sliderAngle - this.angle;
             
-            // Calculate shortest rotation direction
-            let angleDiff = targetAngle - this.angle;
-            
-            // Normalize angle difference to [-PI, PI]
+            // Normalize angle difference to [-PI, PI] for shortest path
             while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
             while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
             
-            // Rotate towards target angle
-            const rotationDirection = angleDiff > 0 ? 1 : -1;
-            this.rotationSpeed = Math.min(
-                Math.abs(angleDiff) * this.rotationAcceleration,
-                this.maxRotationSpeed
-            ) * rotationDirection;
+            // Smooth interpolation factor (higher = faster response, but still smooth)
+            const smoothingFactor = 0.25; // Adjust for smoothness vs responsiveness
+            
+            // Smoothly interpolate towards slider angle
+            this.angle += angleDiff * smoothingFactor;
+            
+            // Calculate rotation speed based on change (for wobble effect)
+            this.rotationSpeed = angleDiff / deltaTime;
+            if (Math.abs(this.rotationSpeed) > this.maxRotationSpeed) {
+                this.rotationSpeed = Math.sign(this.rotationSpeed) * this.maxRotationSpeed;
+            }
         } else {
-            // Decelerate when not touching
+            // No slider input - decelerate rotation
             this.rotationSpeed *= 0.9; // Friction
             if (Math.abs(this.rotationSpeed) < 0.1) {
                 this.rotationSpeed = 0;
             }
+            
+            // Update rotation based on remaining speed
+            this.angle += this.rotationSpeed * deltaTime;
         }
         
-        // Update rotation
-        this.angle += this.rotationSpeed * deltaTime;
-        
-        // Normalize angle to [0, 2PI]
+        // Normalize angle to [0, 2π] range
         while (this.angle > Math.PI * 2) this.angle -= Math.PI * 2;
         while (this.angle < 0) this.angle += Math.PI * 2;
         
@@ -2313,6 +2313,22 @@ class GameEngine {
         // UI button tracking
         this.hoveredButton = null;
         
+        // Circular joystick for rotation control
+        this.sliderCenterX = GAME_WIDTH / 2;
+        this.sliderCenterY = GAME_HEIGHT - 100; // Near bottom of screen
+        this.sliderRadius = 70; // Joystick circle radius (dead zone + active zone)
+        this.sliderTrackWidth = 10; // Track stroke width
+        this.sliderHandleRadius = 14; // Handle/thumb radius
+        this.sliderColor = this.darkenColor('#51caf5', 20); // One shade darker than background
+        this.sliderActive = false; // Whether joystick is currently being dragged
+        this.sliderAngle = 0; // Current joystick angle in radians (0 to 2π)
+        this.sliderHandleX = this.sliderCenterX; // Handle X position (relative to center)
+        this.sliderHandleY = this.sliderCenterY; // Handle Y position (relative to center)
+        this.targetHandleX = this.sliderCenterX; // Target handle X position
+        this.targetHandleY = this.sliderCenterY; // Target handle Y position
+        this.sliderSmoothingFactor = 0.25; // Smoothing factor for handle movement (0-1, higher = faster response)
+        this.joystickReturnSpeed = 0.15; // Speed at which handle returns to center when released
+        
         // Start game loop
         this.start();
     }
@@ -2476,9 +2492,70 @@ class GameEngine {
         //     this.currentState = GameState.PAUSED;
         // }
         
-        // Update player
+        // Handle joystick input for rotation control
+        const touch = this.inputManager.getPrimaryTouch();
+        if (touch) {
+            // Check if touch is within joystick area (larger area for easier activation)
+            const touchDistance = Math.sqrt(
+                Math.pow(touch.x - this.sliderCenterX, 2) + 
+                Math.pow(touch.y - this.sliderCenterY, 2)
+            );
+            
+            if (touchDistance <= this.sliderRadius + 30) { // Extended activation area
+                // Calculate offset from center
+                let dx = touch.x - this.sliderCenterX;
+                let dy = touch.y - this.sliderCenterY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // Clamp handle position to joystick radius (constrain within circle)
+                if (distance > this.sliderRadius) {
+                    dx = (dx / distance) * this.sliderRadius;
+                    dy = (dy / distance) * this.sliderRadius;
+                }
+                
+                // Set target handle position
+                this.targetHandleX = this.sliderCenterX + dx;
+                this.targetHandleY = this.sliderCenterY + dy;
+                this.sliderActive = true;
+            }
+        } else {
+            // Touch ended - return handle to center
+            this.sliderActive = false;
+            this.targetHandleX = this.sliderCenterX;
+            this.targetHandleY = this.sliderCenterY;
+        }
+        
+        // Smoothly interpolate handle position towards target
+        const handleDx = this.targetHandleX - this.sliderHandleX;
+        const handleDy = this.targetHandleY - this.sliderHandleY;
+        const handleDistance = Math.sqrt(handleDx * handleDx + handleDy * handleDy);
+        
+        if (handleDistance > 0.1) { // Only update if there's significant movement
+            const smoothing = this.sliderActive ? this.sliderSmoothingFactor : this.joystickReturnSpeed;
+            this.sliderHandleX += handleDx * smoothing;
+            this.sliderHandleY += handleDy * smoothing;
+        } else {
+            // Snap to target if very close
+            this.sliderHandleX = this.targetHandleX;
+            this.sliderHandleY = this.targetHandleY;
+        }
+        
+        // Calculate joystick angle from handle position
+        const handleOffsetX = this.sliderHandleX - this.sliderCenterX;
+        const handleOffsetY = this.sliderHandleY - this.sliderCenterY;
+        const handleDistanceFromCenter = Math.sqrt(handleOffsetX * handleOffsetX + handleOffsetY * handleOffsetY);
+        
+        // Only rotate if handle is moved away from center (dead zone)
+        if (handleDistanceFromCenter > 5) { // Small dead zone
+            this.sliderAngle = Math.atan2(handleOffsetY, handleOffsetX);
+            // Normalize to [0, 2π]
+            if (this.sliderAngle < 0) this.sliderAngle += Math.PI * 2;
+        }
+        
+        // Update player (pass slider angle if joystick is active and moved)
         if (this.player) {
-            this.player.update(deltaTime, this.inputManager);
+            const isJoystickActive = handleDistanceFromCenter > 5;
+            this.player.update(deltaTime, isJoystickActive ? this.sliderAngle : null);
         }
         
         // Update projectiles (using object pool)
@@ -2761,6 +2838,36 @@ class GameEngine {
         }
     }
     
+    /**
+     * Darken a hex color by a percentage
+     * @param {string} hex - Hex color string (e.g., '#51caf5')
+     * @param {number} percent - Percentage to darken (0-100, negative values lighten)
+     * @returns {string} Darkened hex color
+     */
+    darkenColor(hex, percent) {
+        // Remove # if present
+        hex = hex.replace('#', '');
+        
+        // Parse RGB components
+        const r = parseInt(hex.substr(0, 2), 16);
+        const g = parseInt(hex.substr(2, 2), 16);
+        const b = parseInt(hex.substr(4, 2), 16);
+        
+        // Darken each component (negative percent lightens)
+        const factor = 1 - (percent / 100);
+        const newR = Math.max(0, Math.min(255, Math.round(r * factor)));
+        const newG = Math.max(0, Math.min(255, Math.round(g * factor)));
+        const newB = Math.max(0, Math.min(255, Math.round(b * factor)));
+        
+        // Convert back to hex
+        const toHex = (n) => {
+            const hex = n.toString(16);
+            return hex.length === 1 ? '0' + hex : hex;
+        };
+        
+        return `#${toHex(newR)}${toHex(newG)}${toHex(newB)}`;
+    }
+    
     updateDifficulty(deltaTime) {
         // Time-based difficulty: gradually increase over time
         // Difficulty increases smoothly based on game playtime
@@ -2790,6 +2897,52 @@ class GameEngine {
         const speedMultiplier = this.difficultyMultiplier; // Higher difficulty = faster projectiles
         this.currentProjectileSpeed = this.baseProjectileSpeed * speedMultiplier;
         this.currentProjectileSpeed = Math.min(this.currentProjectileSpeed, this.maxProjectileSpeed); // Cap at maximum
+    }
+    
+    /**
+     * Render the circular joystick control
+     */
+    renderSlider() {
+        this.ctx.save();
+        
+        // Draw joystick base circle (outer ring)
+        this.ctx.strokeStyle = this.sliderColor;
+        this.ctx.lineWidth = this.sliderTrackWidth;
+        this.ctx.beginPath();
+        this.ctx.arc(this.sliderCenterX, this.sliderCenterY, this.sliderRadius, 0, Math.PI * 2);
+        this.ctx.stroke();
+        
+        // Draw center dot (dead zone indicator)
+        this.ctx.fillStyle = this.sliderColor;
+        this.ctx.globalAlpha = 0.3;
+        this.ctx.beginPath();
+        this.ctx.arc(this.sliderCenterX, this.sliderCenterY, 5, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.globalAlpha = 1.0;
+        
+        // Draw joystick handle at current position
+        const handleX = this.sliderHandleX;
+        const handleY = this.sliderHandleY;
+        
+        // Draw handle shadow
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+        this.ctx.beginPath();
+        this.ctx.arc(handleX + 2, handleY + 2, this.sliderHandleRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+        
+        // Draw handle main body
+        this.ctx.fillStyle = this.sliderColor;
+        this.ctx.beginPath();
+        this.ctx.arc(handleX, handleY, this.sliderHandleRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+        
+        // Add highlight to handle for better visibility
+        this.ctx.fillStyle = this.darkenColor(this.sliderColor, -15); // Slightly lighter
+        this.ctx.beginPath();
+        this.ctx.arc(handleX - 3, handleY - 3, this.sliderHandleRadius * 0.5, 0, Math.PI * 2);
+        this.ctx.fill();
+        
+        this.ctx.restore();
     }
     
     /**
@@ -3274,6 +3427,9 @@ class GameEngine {
         this.ctx.fillText(scoreText, GAME_WIDTH / 2, 100);
         this.ctx.restore();
         
+        // Render circular slider at bottom
+        this.renderSlider();
+        
         // Render projectiles (using object pool) - pass player position for distance-based colors
         const playerX = this.player ? this.player.x : null;
         const playerY = this.player ? this.player.y : null;
@@ -3483,6 +3639,14 @@ class GameEngine {
         
         // Reset time-based difficulty
         this.difficultyMultiplier = 1.0;
+        
+        // Reset joystick state
+        this.sliderAngle = 0;
+        this.sliderHandleX = this.sliderCenterX;
+        this.sliderHandleY = this.sliderCenterY;
+        this.targetHandleX = this.sliderCenterX;
+        this.targetHandleY = this.sliderCenterY;
+        this.sliderActive = false;
         
         // Clear floating scores
         this.floatingScores = [];
@@ -4124,6 +4288,43 @@ class GameEngine {
     drawScore(score, x, y) {
         const formattedScore = score.toLocaleString();
         this.drawText(formattedScore, x, y, 60, '#fff', 'center');
+    }
+    
+    /**
+     * Check if a point is on the slider track
+     * @param {number} x - X coordinate
+     * @param {number} y - Y coordinate
+     * @returns {boolean} True if point is on slider area
+     */
+    isPointOnSlider(x, y) {
+        const dx = x - this.sliderCenterX;
+        const dy = y - this.sliderCenterY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Check if distance is within slider track bounds (radius ± trackWidth/2)
+        const minDistance = this.sliderRadius - this.sliderTrackWidth / 2;
+        const maxDistance = this.sliderRadius + this.sliderTrackWidth / 2;
+        
+        return distance >= minDistance && distance <= maxDistance;
+    }
+    
+    /**
+     * Get slider angle from a touch point
+     * @param {number} x - X coordinate
+     * @param {number} y - Y coordinate
+     * @returns {number} Angle in radians (0 to 2π)
+     */
+    getSliderAngleFromPoint(x, y) {
+        const dx = x - this.sliderCenterX;
+        const dy = y - this.sliderCenterY;
+        let angle = Math.atan2(dy, dx);
+        
+        // Normalize to 0-2π range
+        if (angle < 0) {
+            angle += Math.PI * 2;
+        }
+        
+        return angle;
     }
     
     isPointInButton(x, y, button) {
