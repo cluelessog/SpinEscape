@@ -797,6 +797,52 @@ class Player {
         this.rotationAcceleration = 15; // How fast rotation changes
         this.color = '#4a9eff';
         this.hitFlash = 0; // Flash effect timer
+        
+        // Gap system: Define gap sectors (angles where projectiles can pass through)
+        // Each gap is defined as [startAngle, endAngle] in radians (relative to rotation)
+        // The circle has 4 gaps, each 45 degrees (PI/4 radians) wide
+        // Solid sectors are between gaps
+        this.gapCount = 4; // Number of gaps
+        this.gapSize = Math.PI / 4; // Each gap is 45 degrees (PI/4 radians)
+        this.solidSize = (Math.PI * 2 - (this.gapCount * this.gapSize)) / this.gapCount; // Size of solid sectors
+        
+        // Calculate gap positions (relative to angle 0)
+        this.gaps = [];
+        for (let i = 0; i < this.gapCount; i++) {
+            const gapStart = (Math.PI * 2 / this.gapCount) * i;
+            const gapEnd = gapStart + this.gapSize;
+            this.gaps.push([gapStart, gapEnd]);
+        }
+    }
+    
+    /**
+     * Check if an angle (in world coordinates) hits a solid part or passes through a gap
+     * @param {number} worldAngle - Angle from center to projectile in world coordinates (radians)
+     * @returns {boolean} True if angle hits solid part, false if it's in a gap
+     */
+    isSolidAtAngle(worldAngle) {
+        // Convert world angle to angle relative to player's rotation
+        let relativeAngle = worldAngle - this.angle;
+        
+        // Normalize to [0, 2PI]
+        while (relativeAngle < 0) relativeAngle += Math.PI * 2;
+        while (relativeAngle >= Math.PI * 2) relativeAngle -= Math.PI * 2;
+        
+        // Check if this angle is in any gap
+        for (const [gapStart, gapEnd] of this.gaps) {
+            // Handle wrap-around case
+            if (gapEnd > Math.PI * 2) {
+                if (relativeAngle >= gapStart || relativeAngle <= (gapEnd - Math.PI * 2)) {
+                    return false; // In gap
+                }
+            } else {
+                if (relativeAngle >= gapStart && relativeAngle < gapEnd) {
+                    return false; // In gap
+                }
+            }
+        }
+        
+        return true; // Solid part
     }
     
     update(deltaTime, inputManager) {
@@ -843,23 +889,40 @@ class Player {
     }
     
     render(ctx) {
-        // Draw player circle
+        // Draw player circle with gaps
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
         
         // Flash effect on hit
-        if (this.hitFlash > 0) {
-            ctx.fillStyle = '#ff4444';
-        } else {
-            ctx.fillStyle = this.color;
+        const fillColor = this.hitFlash > 0 ? '#ff4444' : this.color;
+        
+        // Draw solid sectors (arcs between gaps)
+        ctx.fillStyle = fillColor;
+        
+        // Draw each solid sector as a filled arc
+        for (let i = 0; i < this.gapCount; i++) {
+            const gapEnd = this.gaps[i][1];
+            const nextGapStart = i < this.gaps.length - 1 ? this.gaps[i + 1][0] : this.gaps[0][0] + Math.PI * 2;
+            
+            // Calculate solid sector angles
+            let solidStart = gapEnd;
+            let solidEnd = nextGapStart;
+            
+            // Handle wrap-around
+            if (solidEnd < solidStart) {
+                solidEnd += Math.PI * 2;
+            }
+            
+            // Draw arc for this solid sector
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.arc(0, 0, this.radius, solidStart, solidEnd);
+            ctx.closePath();
+            ctx.fill();
         }
         
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // Draw indicator line showing rotation
+        // Draw indicator line showing rotation (points to 0 angle, which is a gap edge)
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 3;
         ctx.beginPath();
@@ -894,6 +957,7 @@ class Projectile {
         this.speed = speed;
         this.active = true;
         this.dodged = false; // Track if projectile was dodged
+        this.spawnTime = performance.now(); // Track when projectile was spawned (for collision grace period)
         
         // Calculate direction vector
         const dx = targetX - x;
@@ -913,16 +977,8 @@ class Projectile {
         // Velocity-based movement is now handled by Physics class in GameEngine
         // This method handles game-specific logic (dodged detection)
         
-        // Deactivate if past center (dodged)
-        const centerX = GAME_WIDTH / 2;
-        const centerY = GAME_HEIGHT / 2;
-        const dx = this.x - centerX;
-        const dy = this.y - centerY;
-        const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
-        
-        if (distanceFromCenter < 50 && !this.dodged) {
-            this.dodged = true;
-        }
+        // NOTE: Dodged detection is now handled in GameEngine.checkCollisions()
+        // We don't mark projectiles as dodged here anymore - let collision detection handle it
         
         // Deactivate if off screen
         if (this.x < -50 || this.x > GAME_WIDTH + 50 ||
@@ -957,10 +1013,16 @@ class ParticleSystem {
         this.maxParticles = 50;
     }
     
-    spawnExplosion(x, y, count = 12) {
+    spawnExplosion(x, y, count = 12, baseColor = '#ff4444') {
         for (let i = 0; i < count && this.particles.length < this.maxParticles; i++) {
             const angle = (Math.PI * 2 * i) / count;
             const speed = 100 + Math.random() * 150;
+            // Use provided color or generate random colors for default explosions
+            let particleColor = baseColor;
+            if (baseColor === '#ff4444') {
+                // Default: yellow to orange for explosions
+                particleColor = `hsl(${Math.random() * 60}, 100%, 60%)`;
+            }
             this.particles.push({
                 x: x,
                 y: y,
@@ -969,7 +1031,7 @@ class ParticleSystem {
                 life: 0.5, // 500ms lifetime
                 maxLife: 0.5,
                 size: 3 + Math.random() * 4,
-                color: `hsl(${Math.random() * 60}, 100%, 60%)` // Yellow to orange
+                color: particleColor
             });
         }
     }
@@ -1482,7 +1544,9 @@ class Physics {
     checkCircleCircle(circle1, circle2) {
         const distance = this.getDistance(circle1, circle2);
         const minDistance = circle1.radius + circle2.radius;
-        return distance < minDistance;
+        // Use <= instead of < to be more lenient (allow touching without collision)
+        // This prevents edge cases where floating point precision causes false collisions
+        return distance <= minDistance;
     }
     
     /**
@@ -2141,17 +2205,8 @@ class GameEngine {
             }
         }
         
-        // Check for dodged projectiles and award points
-        for (let i = activeProjectiles.length - 1; i >= 0; i--) {
-            const projectile = activeProjectiles[i];
-            
-            // Check if projectile was just dodged (passed center and is now inactive)
-            if (!projectile.active && projectile.dodged) {
-                this.addScore(10 * this.comboMultiplier);
-                this.combo++;
-                this.updateComboMultiplier();
-            }
-        }
+        // Dodged projectiles are now handled in checkCollisions() via handleDodge()
+        // This section is kept for any cleanup if needed
     }
     
     updateSpawning(deltaTime) {
@@ -2167,37 +2222,70 @@ class GameEngine {
         const centerX = GAME_WIDTH / 2;
         const centerY = GAME_HEIGHT / 2;
         
+        // Minimum safe distance from player center (player radius + projectile radius + buffer)
+        const minSafeDistance = 30 + 12 + 50; // 92 pixels minimum
+        
         // Randomly choose edge to spawn from
         const edge = Math.floor(Math.random() * 4); // 0=top, 1=right, 2=bottom, 3=left
         let spawnX, spawnY;
         
-        switch (edge) {
-            case 0: // Top
-                spawnX = Math.random() * GAME_WIDTH;
-                spawnY = -20;
-                break;
-            case 1: // Right
-                spawnX = GAME_WIDTH + 20;
-                spawnY = Math.random() * GAME_HEIGHT;
-                break;
-            case 2: // Bottom
-                spawnX = Math.random() * GAME_WIDTH;
-                spawnY = GAME_HEIGHT + 20;
-                break;
-            case 3: // Left
-                spawnX = -20;
-                spawnY = Math.random() * GAME_HEIGHT;
-                break;
-        }
+        // Try to spawn at a safe distance from center
+        let attempts = 0;
+        let distanceFromCenter = 0;
+        
+        do {
+            switch (edge) {
+                case 0: // Top
+                    spawnX = Math.random() * GAME_WIDTH;
+                    spawnY = -20;
+                    break;
+                case 1: // Right
+                    spawnX = GAME_WIDTH + 20;
+                    spawnY = Math.random() * GAME_HEIGHT;
+                    break;
+                case 2: // Bottom
+                    spawnX = Math.random() * GAME_WIDTH;
+                    spawnY = GAME_HEIGHT + 20;
+                    break;
+                case 3: // Left
+                    spawnX = -20;
+                    spawnY = Math.random() * GAME_HEIGHT;
+                    break;
+            }
+            
+            // Calculate distance from center
+            const dx = spawnX - centerX;
+            const dy = spawnY - centerY;
+            distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
+            attempts++;
+            
+            // If too close and we've tried a few times, move spawn point further out
+            if (distanceFromCenter < minSafeDistance && attempts < 5) {
+                // Move spawn point further from center
+                const angle = Math.atan2(dy, dx);
+                const newDistance = minSafeDistance + 50;
+                spawnX = centerX + Math.cos(angle) * newDistance;
+                spawnY = centerY + Math.sin(angle) * newDistance;
+                distanceFromCenter = newDistance;
+            }
+        } while (distanceFromCenter < minSafeDistance && attempts < 10);
+        
+        // Ensure spawn is outside screen bounds
+        if (spawnX < -20) spawnX = -20;
+        if (spawnX > GAME_WIDTH + 20) spawnX = GAME_WIDTH + 20;
+        if (spawnY < -20) spawnY = -20;
+        if (spawnY > GAME_HEIGHT + 20) spawnY = GAME_HEIGHT + 20;
         
         // Acquire projectile from pool (reuses existing objects)
-        this.projectilePool.acquire(
+        const projectile = this.projectilePool.acquire(
             spawnX,
             spawnY,
             centerX,
             centerY,
             this.currentProjectileSpeed
         );
+        
+        // Projectile spawned successfully
     }
     
     checkCollisions() {
@@ -2205,32 +2293,83 @@ class GameEngine {
         
         // Build collision grid for spatial optimization (if many objects)
         const activeProjectiles = this.projectilePool.active.filter(p => p.active);
-        if (activeProjectiles.length > 10) {
-            // Use spatial optimization for performance
-            const allObjects = [this.player, ...activeProjectiles];
-            this.physics.buildCollisionGrid(allObjects, 200);
+        const projectilesToCheck = activeProjectiles.length > 10 
+            ? this.physics.getNearbyObjects(this.player).filter(p => p !== this.player && p.active)
+            : activeProjectiles;
+        
+        for (const projectile of projectilesToCheck) {
+            if (!projectile.active) continue;
             
-            // Only check collisions with nearby objects
-            const nearbyObjects = this.physics.getNearbyObjects(this.player);
-            for (const projectile of nearbyObjects) {
-                if (projectile === this.player || !projectile.active) continue;
+            // Grace period: Don't check collision for projectiles that just spawned (200ms)
+            const timeSinceSpawn = performance.now() - (projectile.spawnTime || 0);
+            if (timeSinceSpawn < 200) continue;
+            
+            // Calculate distance from player center
+            const dx = projectile.x - this.player.x;
+            const dy = projectile.y - this.player.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Check if projectile has reached the circle radius
+            const circleRadius = this.player.radius;
+            const projectileRadius = projectile.radius;
+            const collisionRadius = circleRadius + projectileRadius;
+            
+            // Projectile reaches circle when distance <= circleRadius + projectileRadius
+            if (distance <= collisionRadius) {
+                // Calculate angle from center to projectile (world coordinates)
+                const projectileAngle = Math.atan2(dy, dx);
                 
-                // Use Physics class for collision detection
-                if (this.physics.checkCollision(this.player, projectile)) {
+                // Check if projectile hits solid part or passes through gap
+                const isSolid = this.player.isSolidAtAngle(projectileAngle);
+                
+                if (isSolid) {
+                    // Hit solid part - collision!
                     this.handleCollision(projectile);
                     break; // Only handle one collision per frame
-                }
-            }
-        } else {
-            // For small number of objects, check all (no grid overhead)
-            for (const projectile of activeProjectiles) {
-                // Use Physics class for collision detection
-                if (this.physics.checkCollision(this.player, projectile)) {
-                    this.handleCollision(projectile);
-                    break; // Only handle one collision per frame
+                } else {
+                    // Passed through gap - dodged!
+                    this.handleDodge(projectile);
+                    // Don't break here - allow multiple dodges in same frame
                 }
             }
         }
+    }
+    
+    handleDodge(projectile) {
+        // Check if already dodged to prevent double-processing
+        if (projectile.dodged) {
+            return;
+        }
+        
+        // Mark as dodged immediately to prevent double-processing
+        projectile.dodged = true;
+        projectile.active = false;
+        
+        // Increment combo BEFORE calculating score (so multiplier applies correctly)
+        this.combo++;
+        this.updateComboMultiplier();
+        this.projectilesDodgedThisGame++;
+        
+        // Award points (addScore will apply combo multiplier and difficulty bonus)
+        const basePoints = 10;
+        this.addScore(basePoints);
+        
+        // Visual feedback: floating score (calculate final points for display)
+        const difficultyBonuses = {
+            'easy': 1.0,
+            'medium': 1.1,
+            'hard': 1.2,
+            'extreme': 1.3
+        };
+        const difficultyBonus = difficultyBonuses[this.difficulty] || 1.0;
+        const finalPoints = Math.floor(basePoints * this.comboMultiplier * difficultyBonus);
+        this.spawnFloatingScore(finalPoints, projectile.x, projectile.y);
+        
+        // Particle effect for successful dodge
+        this.particleSystem.spawnExplosion(projectile.x, projectile.y, 8, '#0f0');
+        
+        // Release projectile back to pool
+        this.projectilePool.release(projectile);
     }
     
     handleCollision(projectile) {
@@ -2300,7 +2439,7 @@ class GameEngine {
      * 
      * @param {number} points - Base points to add
      */
-    addScore(points) {
+    addScore(basePoints) {
         // Calculate difficulty bonus
         const difficultyBonuses = {
             'easy': 1.0,
@@ -2310,15 +2449,16 @@ class GameEngine {
         };
         const difficultyBonus = difficultyBonuses[this.difficulty] || 1.0;
         
-        // Apply multiplier and difficulty bonus
-        const basePoints = Math.floor(points);
-        const finalPoints = Math.floor(basePoints * this.comboMultiplier * difficultyBonus);
+        // Apply combo multiplier and difficulty bonus
+        const points = Math.floor(basePoints);
+        const finalPoints = Math.floor(points * this.comboMultiplier * difficultyBonus);
         
+        // Add to score
+        const oldScore = this.score;
         this.score += finalPoints;
-        this.projectilesDodgedThisGame++;
         
-        // Create floating score pop-up
-        this.spawnFloatingScore(finalPoints, GAME_WIDTH / 2, GAME_HEIGHT / 2);
+        // Debug logging
+        console.log(`Score updated: ${oldScore} + ${finalPoints} = ${this.score} (combo: ${this.combo}, multiplier: ${this.comboMultiplier}x, difficulty: ${this.difficulty})`);
         
         // Update session best
         if (this.score > this.sessionBest) {
