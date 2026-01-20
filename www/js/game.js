@@ -23,8 +23,7 @@ const GameState = {
     PAUSED: 'PAUSED',
     GAME_OVER: 'GAME_OVER',
     LEVEL_UP: 'LEVEL_UP', // For future use
-    SETTINGS: 'SETTINGS',
-    HOW_TO_PLAY: 'HOW_TO_PLAY'
+    SETTINGS: 'SETTINGS'
 };
 
 // ============================================================================
@@ -1493,7 +1492,6 @@ class DataManager {
             return {
                 soundEnabled: true,
                 vibrationEnabled: true,
-                difficulty: 'medium',
                 lastPlayed: 0
             };
         } catch (e) {
@@ -1501,7 +1499,6 @@ class DataManager {
             return {
                 soundEnabled: true,
                 vibrationEnabled: true,
-                difficulty: 'medium',
                 lastPlayed: 0
             };
         }
@@ -2303,8 +2300,15 @@ class GameEngine {
         
         // Settings
         this.soundEnabled = true;
-        this.difficulty = 'medium'; // 'easy', 'medium', 'hard', 'extreme'
         this.loadGameSettings();
+        
+        // Time-based difficulty system
+        this.difficultyMultiplier = 1.0; // Current difficulty multiplier (1.0 = base)
+        this.difficultyIncreaseRate = 0.02; // Difficulty increases by this amount per second (slower for gradual increase)
+        this.maxDifficultyMultiplier = 3.0; // Maximum difficulty multiplier
+        this.minSpawnRate = 0.3; // Minimum spawn interval (seconds)
+        this.maxProjectileSpeed = 500; // Maximum projectile speed
+        this.difficultyInterpolationRate = 0.01; // How fast difficulty interpolates (1% per frame for very smooth transitions)
         
         // UI button tracking
         this.hoveredButton = null;
@@ -2427,9 +2431,6 @@ class GameEngine {
             case GameState.SETTINGS:
                 this.updateSettings(deltaTime);
                 break;
-            case GameState.HOW_TO_PLAY:
-                this.updateHowToPlay(deltaTime);
-                break;
         }
         
         this.frameCount++;
@@ -2450,14 +2451,6 @@ class GameEngine {
             if (this.isPointInButton(touch.x, touch.y, settingsButton)) {
                 this.vibrationManager.vibrateTap();
                 this.currentState = GameState.SETTINGS;
-                return;
-            }
-            
-            // Check if How to Play button was clicked
-            const howToPlayButton = this.getHowToPlayButtonBounds();
-            if (this.isPointInButton(touch.x, touch.y, howToPlayButton)) {
-                this.vibrationManager.vibrateTap();
-                this.currentState = GameState.HOW_TO_PLAY;
                 return;
             }
             
@@ -2509,8 +2502,8 @@ class GameEngine {
         // Update visual effects
         this.updateVisualEffects(deltaTime);
         
-        // Update difficulty based on score
-        this.updateDifficulty();
+        // Update difficulty based on time (gradual increase)
+        this.updateDifficulty(deltaTime);
     }
     
     updateProjectiles(deltaTime) {
@@ -2692,19 +2685,13 @@ class GameEngine {
         this.updateComboMultiplier();
         this.projectilesDodgedThisGame++;
         
-        // Award points (addScore will apply combo multiplier and difficulty bonus)
+        // Track successful dodge in performance history
+        // Award points (addScore will apply combo multiplier)
         const basePoints = 10;
         this.addScore(basePoints);
         
-        // Visual feedback: floating score (calculate final points for display)
-        const difficultyBonuses = {
-            'easy': 1.0,
-            'medium': 1.1,
-            'hard': 1.2,
-            'extreme': 1.3
-        };
-        const difficultyBonus = difficultyBonuses[this.difficulty] || 1.0;
-        const finalPoints = Math.floor(basePoints * this.comboMultiplier * difficultyBonus);
+        // Visual feedback: floating score
+        const finalPoints = Math.floor(basePoints * this.comboMultiplier);
         this.spawnFloatingScore(finalPoints, projectile.x, projectile.y);
         
         // Diffusion effect: bright white particles expanding outward when projectile passes through
@@ -2774,15 +2761,35 @@ class GameEngine {
         }
     }
     
-    updateDifficulty() {
-        // Increase spawn rate every 500 points (10% faster)
-        const difficultyLevel = Math.floor(this.score / 500);
-        this.currentSpawnRate = this.baseSpawnRate * Math.pow(0.9, difficultyLevel);
-        this.currentSpawnRate = Math.max(this.currentSpawnRate, 0.3); // Cap at 0.3s minimum
+    updateDifficulty(deltaTime) {
+        // Time-based difficulty: gradually increase over time
+        // Difficulty increases smoothly based on game playtime
+        const timeElapsed = (performance.now() - this.gameStartTime) / 1000; // Time in seconds
         
-        // Increase projectile speed slightly
-        this.currentProjectileSpeed = this.baseProjectileSpeed + (difficultyLevel * 20);
-        this.currentProjectileSpeed = Math.min(this.currentProjectileSpeed, 500); // Cap at 500
+        // Calculate target difficulty based on time (gradual increase)
+        // Difficulty increases linearly: 1.0 at start, up to maxDifficultyMultiplier over time
+        // Increase rate: difficultyIncreaseRate per second (slower for smoother transitions)
+        const targetDifficulty = Math.min(
+            this.maxDifficultyMultiplier,
+            1.0 + (timeElapsed * this.difficultyIncreaseRate)
+        );
+        
+        // Very smoothly interpolate current difficulty towards target (prevents sudden jumps)
+        // Using a very slow interpolation rate (1% per frame) ensures gradual changes
+        const diff = targetDifficulty - this.difficultyMultiplier;
+        this.difficultyMultiplier += diff * this.difficultyInterpolationRate; // Very smooth transition (1% per frame)
+        this.difficultyMultiplier = Math.min(this.maxDifficultyMultiplier, this.difficultyMultiplier);
+        
+        // Apply difficulty to spawn rate and projectile speed
+        // Higher difficulty = faster spawn rate (lower interval) and faster projectiles
+        const spawnRateMultiplier = 1.0 / this.difficultyMultiplier; // Inverse: higher difficulty = lower spawn interval
+        this.currentSpawnRate = this.baseSpawnRate * spawnRateMultiplier;
+        this.currentSpawnRate = Math.max(this.currentSpawnRate, this.minSpawnRate); // Cap at minimum
+        
+        // Apply speed multiplier smoothly - this ensures projectiles don't suddenly speed up
+        const speedMultiplier = this.difficultyMultiplier; // Higher difficulty = faster projectiles
+        this.currentProjectileSpeed = this.baseProjectileSpeed * speedMultiplier;
+        this.currentProjectileSpeed = Math.min(this.currentProjectileSpeed, this.maxProjectileSpeed); // Cap at maximum
     }
     
     /**
@@ -2791,28 +2798,14 @@ class GameEngine {
      * SCORING ALGORITHM:
      * - Base points: 10 per dodged projectile
      * - Combo multiplier: Increases every 10 dodges (1x, 2x, 3x, 4x, 5x max)
-     * - Difficulty bonus: 
-     *   - Easy: 1.0x (no bonus)
-     *   - Medium: 1.1x (+10%)
-     *   - Hard: 1.2x (+20%)
-     *   - Extreme: 1.3x (+30%)
-     * - Final score = basePoints × comboMultiplier × difficultyBonus
+     * - Final score = basePoints × comboMultiplier
      * 
      * @param {number} points - Base points to add
      */
     addScore(basePoints) {
-        // Calculate difficulty bonus
-        const difficultyBonuses = {
-            'easy': 1.0,
-            'medium': 1.1,
-            'hard': 1.2,
-            'extreme': 1.3
-        };
-        const difficultyBonus = difficultyBonuses[this.difficulty] || 1.0;
-        
-        // Apply combo multiplier and difficulty bonus
+        // Apply combo multiplier
         const points = Math.floor(basePoints);
-        const finalPoints = Math.floor(points * this.comboMultiplier * difficultyBonus);
+        const finalPoints = Math.floor(points * this.comboMultiplier);
         
         // Add to score
         const oldScore = this.score;
@@ -2822,7 +2815,7 @@ class GameEngine {
         // The displayScore will animate toward this.score in updateScoreAnimation()
         
         // Debug logging
-        console.log(`Score updated: ${oldScore} + ${finalPoints} = ${this.score} (combo: ${this.combo}, multiplier: ${this.comboMultiplier}x, difficulty: ${this.difficulty})`);
+        console.log(`Score updated: ${oldScore} + ${finalPoints} = ${this.score} (combo: ${this.combo}, multiplier: ${this.comboMultiplier}x)`);
         
         // Update session best
         if (this.score > this.sessionBest) {
@@ -3066,18 +3059,6 @@ class GameEngine {
                 return;
             }
             
-            // Check Difficulty buttons
-            const difficulties = ['easy', 'medium', 'hard', 'extreme'];
-            for (const diff of difficulties) {
-                const diffButton = this.getDifficultyButtonBounds(diff);
-                if (this.isPointInButton(touch.x, touch.y, diffButton)) {
-                    this.vibrationManager.vibrateTap();
-                    this.difficulty = diff;
-                    this.saveGameSettings();
-                    return;
-                }
-            }
-            
             // Check Reset All Data button
             const resetButton = this.getResetDataButtonBounds();
             if (this.isPointInButton(touch.x, touch.y, resetButton)) {
@@ -3150,9 +3131,6 @@ class GameEngine {
                         break;
                     case GameState.SETTINGS:
                         this.renderSettings();
-                        break;
-                    case GameState.HOW_TO_PLAY:
-                        this.renderHowToPlay();
                         break;
                     default:
                         // Fallback for unknown state
@@ -3254,11 +3232,6 @@ class GameEngine {
         const playButton = this.getPlayButtonBounds();
         const playHovered = this.isButtonHovered(playButton);
         this.drawButton(playButton, 'PLAY', theme.colors.primary, playHovered, true);
-        
-        // How to Play button
-        const howToPlayButton = this.getHowToPlayButtonBounds();
-        const howToPlayHovered = this.isButtonHovered(howToPlayButton);
-        this.drawButton(howToPlayButton, 'HOW TO PLAY', theme.colors.secondary, howToPlayHovered);
         
         // Settings button (small, at bottom)
         const settingsButton = this.getSettingsButtonBounds();
@@ -3508,6 +3481,9 @@ class GameEngine {
         this.gameStartTime = performance.now();
         this.gamePlaytime = 0;
         
+        // Reset time-based difficulty
+        this.difficultyMultiplier = 1.0;
+        
         // Clear floating scores
         this.floatingScores = [];
         
@@ -3716,7 +3692,6 @@ class GameEngine {
             this.topScores = [];
             this.achievements = [];
             this.soundEnabled = true;
-            this.difficulty = 'medium';
             this.vibrationManager.enabled = true;
             this.playerStats = {
                 totalGamesPlayed: 0,
@@ -3740,7 +3715,6 @@ class GameEngine {
             if (saved) {
                 const settings = JSON.parse(saved);
                 this.soundEnabled = settings.soundEnabled !== undefined ? settings.soundEnabled : true;
-                this.difficulty = settings.difficulty || 'medium';
                 if (settings.vibrationEnabled !== undefined) {
                     this.vibrationManager.enabled = settings.vibrationEnabled;
                 }
@@ -3749,7 +3723,6 @@ class GameEngine {
             console.error('Failed to load game settings:', e);
             // Use defaults on error
             this.soundEnabled = true;
-            this.difficulty = 'medium';
         }
     }
     
@@ -3758,7 +3731,6 @@ class GameEngine {
             const settings = {
                 soundEnabled: this.soundEnabled,
                 vibrationEnabled: this.vibrationManager.isEnabled(),
-                difficulty: this.difficulty,
                 lastPlayed: Math.floor(Date.now() / 1000)
             };
             
@@ -3804,35 +3776,6 @@ class GameEngine {
         const vibrationText = `Vibration: ${this.vibrationManager.isEnabled() ? 'ON' : 'OFF'}`;
         const vibrationHovered = this.isButtonHovered(vibrationButton);
         this.drawButton(vibrationButton, vibrationText, this.vibrationManager.isEnabled() ? theme.colors.primary : theme.colors.secondary, vibrationHovered);
-        
-        // Difficulty label with theme
-        this.ctx.save();
-        this.ctx.fillStyle = theme.colors.text || '#fff';
-        this.ctx.font = '32px Arial';
-        this.ctx.textAlign = 'center';
-        this.ctx.fillText('Difficulty:', GAME_WIDTH / 2, 500);
-        this.ctx.restore();
-        
-        // Difficulty buttons with theme
-        const difficulties = ['easy', 'medium', 'hard', 'extreme'];
-        const buttonWidth = 150;
-        const buttonHeight = 60;
-        const spacing = 20;
-        const totalWidth = (buttonWidth * 4) + (spacing * 3);
-        const startX = (GAME_WIDTH - totalWidth) / 2;
-        
-        for (let i = 0; i < difficulties.length; i++) {
-            const diff = difficulties[i];
-            const x = startX + (buttonWidth + spacing) * i;
-            const y = 550;
-            const bounds = { x, y, width: buttonWidth, height: buttonHeight };
-            
-            const isSelected = this.difficulty === diff;
-            const color = isSelected ? theme.colors.primary : theme.colors.secondary;
-            const text = diff.toUpperCase();
-            
-            this.drawButton(bounds, text, color, false, isSelected);
-        }
         
         // Back button with theme
         const backButton = this.getBackButtonBounds();
@@ -3895,95 +3838,6 @@ class GameEngine {
             width: 200,
             height: 60
         };
-    }
-    
-    getHowToPlayButtonBounds() {
-        return {
-            x: GAME_WIDTH / 2 - 150,
-            y: 560,
-            width: 300,
-            height: 70
-        };
-    }
-    
-    updateHowToPlay(deltaTime) {
-        const touch = this.inputManager.getPrimaryTouch();
-        
-        if (this.inputManager.wasJustPressed && touch) {
-            // Check Back button
-            const backButton = this.getBackButtonBounds();
-            if (this.isPointInButton(touch.x, touch.y, backButton)) {
-                this.vibrationManager.vibrateTap();
-                this.currentState = GameState.MENU;
-                return;
-            }
-        }
-        
-        // Handle back button (Android)
-        if (this.inputManager.isKeyPressed('Escape') || this.inputManager.isKeyPressed('Backspace')) {
-            this.currentState = GameState.MENU;
-        }
-    }
-    
-    renderHowToPlay() {
-        const theme = this.themeManager.getTheme();
-        
-        // Background with theme
-        const overlayGradient = this.themeManager.createGradient(
-            this.ctx, 0, 0, 0, GAME_HEIGHT,
-            theme.gradients.overlay || ['rgba(0, 0, 0, 0.95)', 'rgba(0, 0, 0, 0.95)']
-        );
-        this.ctx.fillStyle = overlayGradient;
-        this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-        
-        // Title with glow
-        this.ctx.save();
-        this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
-        this.ctx.shadowBlur = 15;
-        this.ctx.fillStyle = theme.colors.text || '#fff';
-        this.ctx.font = 'bold 48px Arial';
-        this.ctx.textAlign = 'center';
-        this.ctx.fillText('HOW TO PLAY', GAME_WIDTH / 2, 100);
-        this.ctx.restore();
-        
-        // Instructions with theme
-        this.ctx.save();
-        this.ctx.font = '24px Arial';
-        this.ctx.fillStyle = theme.colors.text || '#fff';
-        this.ctx.textAlign = 'center';
-        let y = 200;
-        const instructions = [
-            'Rotate the circle to dodge',
-            'incoming projectiles!',
-            '',
-            'Tap anywhere on screen to',
-            'rotate the circle toward',
-            'that direction.',
-            '',
-            'Dodge projectiles to earn',
-            'points and build combos.',
-            '',
-            'Higher combos = more points!',
-            '',
-            'Difficulty increases every',
-            '500 points.'
-        ];
-        
-        for (const line of instructions) {
-            if (line) {
-                this.ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-                this.ctx.shadowBlur = 4;
-                this.ctx.shadowOffsetY = 2;
-            }
-            this.ctx.fillText(line, GAME_WIDTH / 2, y);
-            y += 35;
-        }
-        this.ctx.restore();
-        
-        // Back button with theme
-        const backButton = this.getBackButtonBounds();
-        const backHovered = this.isButtonHovered(backButton);
-        this.drawButton(backButton, 'BACK', theme.colors.secondary, backHovered);
     }
     
     getRetryButtonBounds() {
@@ -4064,23 +3918,6 @@ class GameEngine {
             y: 300,
             width: 400,
             height: 70
-        };
-    }
-    
-    getDifficultyButtonBounds(difficulty) {
-        const difficulties = ['easy', 'medium', 'hard', 'extreme'];
-        const buttonWidth = 150;
-        const buttonHeight = 60;
-        const spacing = 20;
-        const totalWidth = (buttonWidth * 4) + (spacing * 3);
-        const startX = (GAME_WIDTH - totalWidth) / 2;
-        const index = difficulties.indexOf(difficulty);
-        
-        return {
-            x: startX + (buttonWidth + spacing) * index,
-            y: 550,
-            width: buttonWidth,
-            height: buttonHeight
         };
     }
     
