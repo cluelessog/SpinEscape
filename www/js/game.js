@@ -1990,6 +1990,22 @@ class GameEngine {
         this.dataManager = new DataManager(); // Data persistence manager
         this.physics = new Physics(); // Physics and collision system
         
+        // Theme and visual systems
+        this.themeManager = new ThemeManager();
+        this.assetLoader = new AssetLoader();
+        this.animationManager = new AnimationManager();
+        
+        // Menu-specific visual state
+        this.menuParticles = [];
+        this.menuParticleTimer = 0;
+        this.menuBackgroundImage = null;
+        this.menuTitleAlpha = 0;
+        this.menuTitlePulse = 1.0;
+        this.menuInitialized = false;
+        
+        // Initialize menu visuals
+        this.initMenuVisuals();
+        
         // Game objects
         this.player = null;
         this.score = 0;
@@ -2081,10 +2097,75 @@ class GameEngine {
         requestAnimationFrame((time) => this.gameLoop(time));
     }
     
+    initMenuVisuals() {
+        // Load background image for current theme
+        const themeId = this.themeManager.currentTheme;
+        this.assetLoader.loadThemeBackground(themeId, 'main-menu').then(img => {
+            this.menuBackgroundImage = img;
+        }).catch(() => {
+            this.menuBackgroundImage = null;
+        });
+        
+        // Animate title fade-in
+        this.menuTitleAlpha = 0;
+        this.animationManager.fadeIn(0.8, (progress, value) => {
+            this.menuTitleAlpha = value;
+        });
+        
+        // Start title pulse animation
+        this.animationManager.pulse(0.95, 1.05, 2.0, (progress, value) => {
+            this.menuTitlePulse = value;
+        });
+        
+        // Initialize menu particles
+        this.menuParticles = [];
+        this.menuParticleTimer = 0;
+    }
+    
+    updateMenuParticles(deltaTime) {
+        const theme = this.themeManager.getTheme();
+        const particleColor = theme.effects.particleColor || theme.colors.primary;
+        
+        // Spawn new particles
+        this.menuParticleTimer += deltaTime;
+        if (this.menuParticleTimer >= 0.3) { // Spawn every 0.3 seconds
+            this.menuParticleTimer = 0;
+            
+            // Spawn 1-2 particles
+            const count = Math.random() < 0.5 ? 1 : 2;
+            for (let i = 0; i < count; i++) {
+                this.menuParticles.push({
+                    x: Math.random() * GAME_WIDTH,
+                    y: GAME_HEIGHT + 10,
+                    vx: (Math.random() - 0.5) * 50,
+                    vy: -50 - Math.random() * 100,
+                    size: 2 + Math.random() * 3,
+                    life: 1.0,
+                    maxLife: 1.0,
+                    color: particleColor
+                });
+            }
+        }
+        
+        // Update particles
+        for (let i = this.menuParticles.length - 1; i >= 0; i--) {
+            const p = this.menuParticles[i];
+            p.x += p.vx * deltaTime;
+            p.y += p.vy * deltaTime;
+            p.life -= deltaTime;
+            
+            // Remove dead particles
+            if (p.life <= 0 || p.y < -10) {
+                this.menuParticles.splice(i, 1);
+            }
+        }
+    }
+    
     update(deltaTime) {
         switch (this.currentState) {
             case GameState.MENU:
                 this.updateMenu(deltaTime);
+                this.updateMenuParticles(deltaTime);
                 break;
             case GameState.PLAYING:
                 this.updatePlaying(deltaTime);
@@ -2110,6 +2191,12 @@ class GameEngine {
     }
     
     updateMenu(deltaTime) {
+        // Reinitialize menu visuals if not already done
+        if (!this.menuInitialized) {
+            this.initMenuVisuals();
+            this.menuInitialized = true;
+        }
+        
         // Check button clicks
         const touch = this.inputManager.getPrimaryTouch();
         if (this.inputManager.wasJustPressed && touch) {
@@ -2770,40 +2857,102 @@ class GameEngine {
     }
     
     renderMenu() {
-        // Background
-        this.ctx.fillStyle = '#1a1a2e';
-        this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        const theme = this.themeManager.getTheme();
         
-        // Title (120px font as per requirements)
-        this.ctx.fillStyle = '#fff';
-        this.ctx.font = 'bold 120px Arial';
+        // Background - try to use image first, fallback to gradient
+        if (this.menuBackgroundImage) {
+            this.ctx.drawImage(this.menuBackgroundImage, 0, 0, GAME_WIDTH, GAME_HEIGHT);
+            // Apply overlay for readability
+            const overlayGradient = this.themeManager.createGradient(
+                this.ctx, 0, 0, 0, GAME_HEIGHT,
+                ['rgba(0, 0, 0, 0.3)', 'rgba(0, 0, 0, 0.6)']
+            );
+            this.ctx.fillStyle = overlayGradient;
+            this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        } else {
+            // Fallback to gradient background
+            const bgGradient = this.themeManager.getBackgroundGradient(this.ctx);
+            this.ctx.fillStyle = bgGradient;
+            this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        }
+        
+        // Render menu particles
+        this.renderMenuParticles();
+        
+        // Title with animation and glow effect
+        this.ctx.save();
+        const titleY = 150;
+        const titleScale = this.menuTitlePulse;
+        const titleAlpha = this.menuTitleAlpha;
+        
+        // Title glow/shadow
+        this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
+        this.ctx.shadowBlur = 30;
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 0;
+        
+        // Title text
+        this.ctx.globalAlpha = titleAlpha;
+        this.ctx.fillStyle = theme.colors.text || '#fff';
+        this.ctx.font = `bold ${Math.floor(120 * titleScale)}px Arial`;
         this.ctx.textAlign = 'center';
-        this.ctx.fillText('SPIN ESCAPE', GAME_WIDTH / 2, 150);
+        this.ctx.fillText('SPIN ESCAPE', GAME_WIDTH / 2, titleY);
+        this.ctx.restore();
         
-        // Best Score (formatted as "BEST SCORE: 12,450")
-        this.ctx.font = '32px Arial';
+        // Best Score with enhanced styling
+        this.ctx.save();
+        this.ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+        this.ctx.shadowBlur = 8;
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 2;
+        this.ctx.fillStyle = theme.colors.text || '#fff';
+        this.ctx.font = 'bold 32px Arial';
+        this.ctx.textAlign = 'center';
         const formattedScore = this.highScore.toLocaleString();
         this.ctx.fillText(`BEST SCORE: ${formattedScore}`, GAME_WIDTH / 2, 250);
+        this.ctx.restore();
         
         // Games played
+        this.ctx.save();
+        this.ctx.fillStyle = theme.colors.textSecondary || '#aaa';
         this.ctx.font = '20px Arial';
-        this.ctx.fillStyle = '#aaa';
+        this.ctx.textAlign = 'center';
         this.ctx.fillText(`Games Played: ${this.gameCount}`, GAME_WIDTH / 2, 290);
+        this.ctx.restore();
         
-        // Play button (centered, large)
+        // Play button (centered, large, primary)
         const playButton = this.getPlayButtonBounds();
         const playHovered = this.isButtonHovered(playButton);
-        this.drawButton(playButton, 'PLAY', '#4a9eff', playHovered);
+        this.drawButton(playButton, 'PLAY', theme.colors.primary, playHovered, true);
         
         // How to Play button
         const howToPlayButton = this.getHowToPlayButtonBounds();
         const howToPlayHovered = this.isButtonHovered(howToPlayButton);
-        this.drawButton(howToPlayButton, 'HOW TO PLAY', '#666', howToPlayHovered);
+        this.drawButton(howToPlayButton, 'HOW TO PLAY', theme.colors.secondary, howToPlayHovered);
         
         // Settings button (small, at bottom)
         const settingsButton = this.getSettingsButtonBounds();
         const settingsHovered = this.isButtonHovered(settingsButton);
-        this.drawButton(settingsButton, 'SETTINGS', '#666', settingsHovered);
+        this.drawButton(settingsButton, 'SETTINGS', theme.colors.secondary, settingsHovered);
+    }
+    
+    renderMenuParticles() {
+        if (this.menuParticles.length === 0) return;
+        
+        const theme = this.themeManager.getTheme();
+        
+        for (const p of this.menuParticles) {
+            const alpha = p.life / p.maxLife;
+            this.ctx.save();
+            this.ctx.globalAlpha = alpha * 0.6;
+            this.ctx.fillStyle = p.color;
+            this.ctx.shadowColor = p.color;
+            this.ctx.shadowBlur = 5;
+            this.ctx.beginPath();
+            this.ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            this.ctx.fill();
+            this.ctx.restore();
+        }
     }
     
     renderPlaying() {
@@ -2886,102 +3035,156 @@ class GameEngine {
             }
         }
         
-        // Draw gameplay HUD background
-        this.ctx.fillStyle = '#1a1a2e';
+        // Draw gameplay HUD background with theme
+        const theme = this.themeManager.getTheme();
+        const hudGradient = this.themeManager.createGradient(
+            this.ctx, 0, 0, 0, 200,
+            ['rgba(26, 26, 46, 0.95)', 'rgba(26, 26, 46, 0.85)']
+        );
+        this.ctx.fillStyle = hudGradient;
         this.ctx.fillRect(0, 0, GAME_WIDTH, 200);
         
-        // HUD - Score (60px font as per requirements)
-        this.ctx.fillStyle = '#fff';
+        // HUD - Score (60px font as per requirements) with glow
+        this.ctx.save();
+        this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
+        this.ctx.shadowBlur = 15;
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 0;
+        this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = 'bold 60px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.fillText(`Score: ${this.score}`, GAME_WIDTH / 2, 80);
+        this.ctx.restore();
         
-        // Combo multiplier display
+        // Combo multiplier display with enhanced styling
         if (this.comboMultiplier > 1) {
-            this.ctx.fillStyle = '#ffd700';
+            this.ctx.save();
+            this.ctx.shadowColor = theme.colors.warning || '#ffd700';
+            this.ctx.shadowBlur = 20;
+            this.ctx.fillStyle = theme.colors.warning || '#ffd700';
             this.ctx.font = 'bold 32px Arial';
             this.ctx.fillText(`${this.comboMultiplier}x COMBO!`, GAME_WIDTH / 2, 130);
-            this.ctx.fillStyle = '#fff';
+            this.ctx.restore();
+            
+            this.ctx.save();
+            this.ctx.fillStyle = theme.colors.text || '#fff';
             this.ctx.font = '24px Arial';
             this.ctx.fillText(`Dodges: ${this.combo}`, GAME_WIDTH / 2, 160);
+            this.ctx.restore();
         }
         
-        // Level/Difficulty indicator (top-left)
+        // Level/Difficulty indicator (top-left) with theme colors
         const difficultyLevel = Math.floor(this.score / 500);
-        this.ctx.fillStyle = '#aaa';
+        this.ctx.save();
+        this.ctx.fillStyle = theme.colors.textSecondary || '#aaa';
         this.ctx.font = '20px Arial';
         this.ctx.textAlign = 'left';
         this.ctx.fillText(`Level: ${difficultyLevel + 1}`, 20, 30);
         this.ctx.fillText(`Difficulty: ${this.difficulty.toUpperCase()}`, 20, 55);
+        this.ctx.restore();
     }
     
     renderPaused() {
-        // Draw pause overlay
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        const theme = this.themeManager.getTheme();
+        
+        // Draw pause overlay with theme
+        const overlayGradient = this.themeManager.createGradient(
+            this.ctx, 0, 0, 0, GAME_HEIGHT,
+            ['rgba(0, 0, 0, 0.7)', 'rgba(0, 0, 0, 0.85)']
+        );
+        this.ctx.fillStyle = overlayGradient;
         this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
         
-        // Paused text
-        this.ctx.fillStyle = '#fff';
+        // Paused text with glow
+        this.ctx.save();
+        this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
+        this.ctx.shadowBlur = 20;
+        this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = 'bold 64px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.fillText('PAUSED', GAME_WIDTH / 2, 200);
+        this.ctx.restore();
         
-        // Buttons: RESUME, SETTINGS, QUIT
+        // Buttons: RESUME, SETTINGS, QUIT with theme
         const resumeButton = this.getResumeButtonBounds();
         const resumeHovered = this.isButtonHovered(resumeButton);
-        this.drawButton(resumeButton, 'RESUME', '#4a9eff', resumeHovered);
+        this.drawButton(resumeButton, 'RESUME', theme.colors.primary, resumeHovered, true);
         
         const settingsButton = this.getPauseSettingsButtonBounds();
         const settingsHovered = this.isButtonHovered(settingsButton);
-        this.drawButton(settingsButton, 'SETTINGS', '#666', settingsHovered);
+        this.drawButton(settingsButton, 'SETTINGS', theme.colors.secondary, settingsHovered);
         
         const quitButton = this.getQuitButtonBounds();
         const quitHovered = this.isButtonHovered(quitButton);
-        this.drawButton(quitButton, 'QUIT', '#999', quitHovered);
+        this.drawButton(quitButton, 'QUIT', theme.colors.secondary, quitHovered);
     }
     
     renderGameOver() {
-        // Draw game over background
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+        const theme = this.themeManager.getTheme();
+        
+        // Draw game over background with theme
+        const overlayGradient = this.themeManager.createGradient(
+            this.ctx, 0, 0, 0, GAME_HEIGHT,
+            ['rgba(0, 0, 0, 0.9)', 'rgba(0, 0, 0, 0.95)']
+        );
+        this.ctx.fillStyle = overlayGradient;
         this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
         
-        // Game Over text (large)
-        this.ctx.fillStyle = '#f00';
+        // Game Over text (large) with dramatic glow
+        this.ctx.save();
+        this.ctx.shadowColor = theme.colors.danger || '#f00';
+        this.ctx.shadowBlur = 30;
+        this.ctx.fillStyle = theme.colors.danger || '#f00';
         this.ctx.font = 'bold 64px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.fillText('GAME OVER', GAME_WIDTH / 2, 200);
+        this.ctx.restore();
         
-        // Final score (large)
-        this.ctx.fillStyle = '#fff';
+        // Final score (large) with glow
+        this.ctx.save();
+        this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
+        this.ctx.shadowBlur = 15;
+        this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = 'bold 48px Arial';
         const formattedScore = this.score.toLocaleString();
         this.ctx.fillText(`Score: ${formattedScore}`, GAME_WIDTH / 2, 280);
+        this.ctx.restore();
         
         // Best score comparison (formatted as "BEST: 15,200")
+        this.ctx.save();
+        this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = '32px Arial';
         const formattedHighScore = this.highScore.toLocaleString();
         this.ctx.fillText(`BEST: ${formattedHighScore}`, GAME_WIDTH / 2, 330);
+        this.ctx.restore();
         
         // Session best
         if (this.sessionBest > 0 && this.sessionBest !== this.score) {
+            this.ctx.save();
             this.ctx.font = '24px Arial';
-            this.ctx.fillStyle = '#aaa';
+            this.ctx.fillStyle = theme.colors.textSecondary || '#aaa';
             const formattedSessionBest = this.sessionBest.toLocaleString();
             this.ctx.fillText(`Session Best: ${formattedSessionBest}`, GAME_WIDTH / 2, 360);
+            this.ctx.restore();
         }
         
         // Best combo
         if (this.bestComboThisGame > 0) {
+            this.ctx.save();
+            this.ctx.fillStyle = theme.colors.text || '#fff';
             this.ctx.font = '28px Arial';
             this.ctx.fillText(`Best Combo: ${this.bestComboThisGame}`, GAME_WIDTH / 2, 390);
+            this.ctx.restore();
         }
         
-        // Top 3 Scores
+        // Top 3 Scores with enhanced styling
         if (this.topScores && this.topScores.length > 0) {
-            this.ctx.fillStyle = '#fff';
+            this.ctx.save();
+            this.ctx.fillStyle = theme.colors.text || '#fff';
             this.ctx.font = '24px Arial';
             this.ctx.textAlign = 'center';
             this.ctx.fillText('Top Scores:', GAME_WIDTH / 2, 450);
+            this.ctx.restore();
             
             let y = 485;
             const maxDisplay = Math.min(this.topScores.length, 3);
@@ -2993,49 +3196,70 @@ class GameEngine {
                 }
                 const rank = i + 1;
                 const scoreText = `${rank}. ${scoreData.score.toLocaleString()}`;
-                this.ctx.fillStyle = rank === 1 ? '#ffd700' : '#aaa';
+                this.ctx.save();
+                this.ctx.fillStyle = rank === 1 ? (theme.colors.warning || '#ffd700') : (theme.colors.textSecondary || '#aaa');
+                if (rank === 1) {
+                    this.ctx.shadowColor = theme.colors.warning || '#ffd700';
+                    this.ctx.shadowBlur = 10;
+                }
                 this.ctx.font = '20px Arial';
                 this.ctx.fillText(scoreText, GAME_WIDTH / 2, y);
+                this.ctx.restore();
                 y += 30;
             }
         }
         
-        // RETRY button (green, large)
+        // RETRY button (success color, large, primary)
         const retryButton = this.getRetryButtonBounds();
         const retryHovered = this.isButtonHovered(retryButton);
-        this.drawButton(retryButton, 'RETRY', '#0f0', retryHovered);
+        this.drawButton(retryButton, 'RETRY', theme.colors.success || '#0f0', retryHovered, true);
         
-        // MAIN MENU button (gray)
+        // MAIN MENU button (secondary)
         const menuButton = this.getMainMenuButtonBounds();
         const menuHovered = this.isButtonHovered(menuButton);
-        this.drawButton(menuButton, 'MAIN MENU', '#666', menuHovered);
+        this.drawButton(menuButton, 'MAIN MENU', theme.colors.secondary, menuHovered);
         
         // Share button (optional, for web version)
         if (navigator.share) {
             const shareButton = this.getShareButtonBounds();
             const shareHovered = this.isButtonHovered(shareButton);
-            this.drawButton(shareButton, 'SHARE', '#4a9eff', shareHovered);
+            this.drawButton(shareButton, 'SHARE', theme.colors.primary, shareHovered);
         }
     }
     
     renderLevelUp() {
-        // Background
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+        const theme = this.themeManager.getTheme();
+        
+        // Background with theme
+        const overlayGradient = this.themeManager.createGradient(
+            this.ctx, 0, 0, 0, GAME_HEIGHT,
+            ['rgba(0, 0, 0, 0.9)', 'rgba(0, 0, 0, 0.95)']
+        );
+        this.ctx.fillStyle = overlayGradient;
         this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
         
-        // Level Up text
-        this.ctx.fillStyle = '#0f0';
+        // Level Up text with dramatic glow
+        this.ctx.save();
+        this.ctx.shadowColor = theme.colors.success || '#0f0';
+        this.ctx.shadowBlur = 30;
+        this.ctx.fillStyle = theme.colors.success || '#0f0';
         this.ctx.font = 'bold 64px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.fillText('LEVEL UP!', GAME_WIDTH / 2, GAME_HEIGHT / 2);
+        this.ctx.restore();
         
-        // Continue text
-        this.ctx.fillStyle = '#fff';
+        // Continue text with theme
+        this.ctx.save();
+        this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = '24px Arial';
         this.ctx.fillText('Tap or Press Space to Continue', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 100);
+        this.ctx.restore();
     }
     
     startGame() {
+        // Reset menu initialization flag
+        this.menuInitialized = false;
+        
         this.currentState = GameState.PLAYING;
         this.score = 0;
         this.combo = 0;
@@ -3313,35 +3537,47 @@ class GameEngine {
     }
     
     renderSettings() {
-        // Background
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.95)';
+        const theme = this.themeManager.getTheme();
+        
+        // Background with theme
+        const overlayGradient = this.themeManager.createGradient(
+            this.ctx, 0, 0, 0, GAME_HEIGHT,
+            theme.gradients.overlay || ['rgba(0, 0, 0, 0.95)', 'rgba(0, 0, 0, 0.95)']
+        );
+        this.ctx.fillStyle = overlayGradient;
         this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
         
-        // Title
-        this.ctx.fillStyle = '#fff';
+        // Title with glow
+        this.ctx.save();
+        this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
+        this.ctx.shadowBlur = 15;
+        this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = 'bold 48px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.fillText('SETTINGS', GAME_WIDTH / 2, 100);
+        this.ctx.restore();
         
-        // Sound toggle
+        // Sound toggle with theme
         const soundButton = this.getSoundButtonBounds();
         const soundText = `Sound: ${this.soundEnabled ? 'ON' : 'OFF'}`;
         const soundHovered = this.isButtonHovered(soundButton);
-        this.drawButton(soundButton, soundText, this.soundEnabled ? '#4a9eff' : '#666', soundHovered);
+        this.drawButton(soundButton, soundText, this.soundEnabled ? theme.colors.primary : theme.colors.secondary, soundHovered);
         
-        // Vibration toggle
+        // Vibration toggle with theme
         const vibrationButton = this.getVibrationButtonBounds();
         const vibrationText = `Vibration: ${this.vibrationManager.isEnabled() ? 'ON' : 'OFF'}`;
         const vibrationHovered = this.isButtonHovered(vibrationButton);
-        this.drawButton(vibrationButton, vibrationText, this.vibrationManager.isEnabled() ? '#4a9eff' : '#666', vibrationHovered);
+        this.drawButton(vibrationButton, vibrationText, this.vibrationManager.isEnabled() ? theme.colors.primary : theme.colors.secondary, vibrationHovered);
         
-        // Difficulty label
-        this.ctx.fillStyle = '#fff';
+        // Difficulty label with theme
+        this.ctx.save();
+        this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = '32px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.fillText('Difficulty:', GAME_WIDTH / 2, 500);
+        this.ctx.restore();
         
-        // Difficulty buttons
+        // Difficulty buttons with theme
         const difficulties = ['easy', 'medium', 'hard', 'extreme'];
         const buttonWidth = 150;
         const buttonHeight = 60;
@@ -3356,28 +3592,30 @@ class GameEngine {
             const bounds = { x, y, width: buttonWidth, height: buttonHeight };
             
             const isSelected = this.difficulty === diff;
-            const color = isSelected ? '#4a9eff' : '#666';
+            const color = isSelected ? theme.colors.primary : theme.colors.secondary;
             const text = diff.toUpperCase();
             
-            this.drawButton(bounds, text, color);
+            this.drawButton(bounds, text, color, false, isSelected);
         }
         
-        // Back button
+        // Back button with theme
         const backButton = this.getBackButtonBounds();
         const backHovered = this.isButtonHovered(backButton);
-        this.drawButton(backButton, 'BACK', '#999', backHovered);
+        this.drawButton(backButton, 'BACK', theme.colors.secondary, backHovered);
         
-        // Reset All Data button
+        // Reset All Data button with theme
         const resetButton = this.getResetDataButtonBounds();
         const resetHovered = this.isButtonHovered(resetButton);
-        this.drawButton(resetButton, 'RESET ALL DATA', '#f00', resetHovered);
+        this.drawButton(resetButton, 'RESET ALL DATA', theme.colors.danger || '#f00', resetHovered);
         
-        // Achievements display
+        // Achievements display with theme
         if (this.achievements.length > 0) {
-            this.ctx.fillStyle = '#fff';
+            this.ctx.save();
+            this.ctx.fillStyle = theme.colors.text || '#fff';
             this.ctx.font = '24px Arial';
             this.ctx.textAlign = 'center';
             this.ctx.fillText('Achievements:', GAME_WIDTH / 2, 1000);
+            this.ctx.restore();
             
             const achievementNames = {
                 'firstPlay': 'First Play',
@@ -3388,9 +3626,13 @@ class GameEngine {
             let y = 1035;
             for (const achievementId of this.achievements) {
                 const name = achievementNames[achievementId] || achievementId;
-                this.ctx.fillStyle = '#ffd700';
+                this.ctx.save();
+                this.ctx.shadowColor = theme.colors.warning || '#ffd700';
+                this.ctx.shadowBlur = 8;
+                this.ctx.fillStyle = theme.colors.warning || '#ffd700';
                 this.ctx.font = '20px Arial';
                 this.ctx.fillText(`✓ ${name}`, GAME_WIDTH / 2, y);
+                this.ctx.restore();
                 y += 30;
             }
         }
@@ -3448,19 +3690,31 @@ class GameEngine {
     }
     
     renderHowToPlay() {
-        // Background
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.95)';
+        const theme = this.themeManager.getTheme();
+        
+        // Background with theme
+        const overlayGradient = this.themeManager.createGradient(
+            this.ctx, 0, 0, 0, GAME_HEIGHT,
+            theme.gradients.overlay || ['rgba(0, 0, 0, 0.95)', 'rgba(0, 0, 0, 0.95)']
+        );
+        this.ctx.fillStyle = overlayGradient;
         this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
         
-        // Title
-        this.ctx.fillStyle = '#fff';
+        // Title with glow
+        this.ctx.save();
+        this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
+        this.ctx.shadowBlur = 15;
+        this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = 'bold 48px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.fillText('HOW TO PLAY', GAME_WIDTH / 2, 100);
+        this.ctx.restore();
         
-        // Instructions
+        // Instructions with theme
+        this.ctx.save();
         this.ctx.font = '24px Arial';
-        this.ctx.fillStyle = '#fff';
+        this.ctx.fillStyle = theme.colors.text || '#fff';
+        this.ctx.textAlign = 'center';
         let y = 200;
         const instructions = [
             'Rotate the circle to dodge',
@@ -3480,14 +3734,20 @@ class GameEngine {
         ];
         
         for (const line of instructions) {
+            if (line) {
+                this.ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+                this.ctx.shadowBlur = 4;
+                this.ctx.shadowOffsetY = 2;
+            }
             this.ctx.fillText(line, GAME_WIDTH / 2, y);
             y += 35;
         }
+        this.ctx.restore();
         
-        // Back button
+        // Back button with theme
         const backButton = this.getBackButtonBounds();
         const backHovered = this.isButtonHovered(backButton);
-        this.drawButton(backButton, 'BACK', '#999', backHovered);
+        this.drawButton(backButton, 'BACK', theme.colors.secondary, backHovered);
     }
     
     getRetryButtonBounds() {
@@ -3588,7 +3848,17 @@ class GameEngine {
         };
     }
     
-    drawButton(bounds, text, color, isHovered = false) {
+    drawButton(bounds, text, color, isHovered = false, isPrimary = false) {
+        // Use enhanced button if theme system is available
+        if (this.themeManager) {
+            this.drawEnhancedButton(bounds, text, color, isHovered, isPrimary);
+        } else {
+            // Fallback to original button rendering
+            this.drawButtonLegacy(bounds, text, color, isHovered);
+        }
+    }
+    
+    drawButtonLegacy(bounds, text, color, isHovered = false) {
         const { x, y, width, height } = bounds;
         
         // Hover state: slightly brighter and larger
@@ -3618,6 +3888,136 @@ class GameEngine {
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'middle';
         this.ctx.fillText(text, x + width / 2, y + height / 2);
+    }
+    
+    drawEnhancedButton(bounds, text, color, isHovered = false, isPrimary = false) {
+        const { x, y, width, height } = bounds;
+        const theme = this.themeManager.getTheme();
+        const radius = theme.buttonRadius || 15;
+        
+        // Hover scale effect
+        const hoverScale = isHovered ? 1.05 : 1.0;
+        const scaleX = x + width / 2;
+        const scaleY = y + height / 2;
+        const scaledWidth = width * hoverScale;
+        const scaledHeight = height * hoverScale;
+        const scaledX = scaleX - scaledWidth / 2;
+        const scaledY = scaleY - scaledHeight / 2;
+        
+        // Save context
+        this.ctx.save();
+        
+        // Shadow
+        const shadow = theme.buttonShadow || { blur: 10, offsetX: 0, offsetY: 4 };
+        this.ctx.shadowColor = theme.effects.shadowColor || 'rgba(0, 0, 0, 0.3)';
+        this.ctx.shadowBlur = shadow.blur;
+        this.ctx.shadowOffsetX = shadow.offsetX;
+        this.ctx.shadowOffsetY = shadow.offsetY;
+        
+        // Create gradient
+        const gradient = this.themeManager.getButtonGradient(this.ctx, {
+            x: scaledX,
+            y: scaledY,
+            width: scaledWidth,
+            height: scaledHeight
+        }, isHovered);
+        
+        // Draw rounded rectangle (with polyfill for older browsers)
+        this.ctx.fillStyle = gradient;
+        this.ctx.beginPath();
+        if (this.ctx.roundRect) {
+            this.ctx.roundRect(scaledX, scaledY, scaledWidth, scaledHeight, radius);
+        } else {
+            // Polyfill for browsers without roundRect
+            const x = scaledX;
+            const y = scaledY;
+            const w = scaledWidth;
+            const h = scaledHeight;
+            this.ctx.moveTo(x + radius, y);
+            this.ctx.lineTo(x + w - radius, y);
+            this.ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+            this.ctx.lineTo(x + w, y + h - radius);
+            this.ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+            this.ctx.lineTo(x + radius, y + h);
+            this.ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+            this.ctx.lineTo(x, y + radius);
+            this.ctx.quadraticCurveTo(x, y, x + radius, y);
+            this.ctx.closePath();
+        }
+        this.ctx.fill();
+        
+        // Reset shadow
+        this.ctx.shadowBlur = 0;
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 0;
+        
+        // Border
+        this.ctx.strokeStyle = theme.colors.accent || '#fff';
+        this.ctx.lineWidth = isHovered ? 3 : 2;
+        if (!this.ctx.roundRect) {
+            // Recreate path for stroke if using polyfill
+            this.ctx.beginPath();
+            const x = scaledX;
+            const y = scaledY;
+            const w = scaledWidth;
+            const h = scaledHeight;
+            this.ctx.moveTo(x + radius, y);
+            this.ctx.lineTo(x + w - radius, y);
+            this.ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+            this.ctx.lineTo(x + w, y + h - radius);
+            this.ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+            this.ctx.lineTo(x + radius, y + h);
+            this.ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+            this.ctx.lineTo(x, y + radius);
+            this.ctx.quadraticCurveTo(x, y, x + radius, y);
+            this.ctx.closePath();
+        }
+        this.ctx.stroke();
+        
+        // Glow effect for hover/primary
+        if (isHovered || isPrimary) {
+            this.ctx.strokeStyle = theme.effects.glowColor || theme.colors.primary;
+            this.ctx.shadowColor = theme.effects.glowColor || theme.colors.primary;
+            this.ctx.shadowBlur = isPrimary ? 20 : 10;
+            this.ctx.lineWidth = 2;
+            if (!this.ctx.roundRect) {
+                // Recreate path for glow stroke if using polyfill
+                this.ctx.beginPath();
+                const x = scaledX;
+                const y = scaledY;
+                const w = scaledWidth;
+                const h = scaledHeight;
+                this.ctx.moveTo(x + radius, y);
+                this.ctx.lineTo(x + w - radius, y);
+                this.ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+                this.ctx.lineTo(x + w, y + h - radius);
+                this.ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+                this.ctx.lineTo(x + radius, y + h);
+                this.ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+                this.ctx.lineTo(x, y + radius);
+                this.ctx.quadraticCurveTo(x, y, x + radius, y);
+                this.ctx.closePath();
+            }
+            this.ctx.stroke();
+            this.ctx.shadowBlur = 0;
+        }
+        
+        // Button text with shadow
+        this.ctx.fillStyle = theme.colors.text || '#fff';
+        this.ctx.font = `bold ${Math.floor(28 * hoverScale)}px Arial`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        
+        // Text shadow
+        this.ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+        this.ctx.shadowBlur = 4;
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 2;
+        
+        this.ctx.fillText(text, scaleX, scaleY);
+        
+        // Restore context
+        this.ctx.restore();
     }
     
     lightenColor(color, amount) {
