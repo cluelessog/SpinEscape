@@ -2057,6 +2057,14 @@ class GameEngine {
                 return;
             }
             
+            // Check if How to Play button was clicked
+            const howToPlayButton = this.getHowToPlayButtonBounds();
+            if (this.isPointInButton(touch.x, touch.y, howToPlayButton)) {
+                this.vibrationManager.vibrateTap();
+                this.currentState = GameState.HOW_TO_PLAY;
+                return;
+            }
+            
             // Check if Play button was clicked (center area)
             const playButton = this.getPlayButtonBounds();
             if (this.isPointInButton(touch.x, touch.y, playButton)) {
@@ -2425,6 +2433,8 @@ class GameEngine {
             const menuButton = this.getMainMenuButtonBounds();
             if (this.isPointInButton(touch.x, touch.y, menuButton)) {
                 this.vibrationManager.vibrateTap();
+                // Reset visual effects when leaving game over screen
+                this.resetVisualEffects();
                 this.currentState = GameState.MENU;
                 return;
             }
@@ -2545,10 +2555,11 @@ class GameEngine {
         }
         
         try {
-            // Apply screen shake offset
+            // Apply screen shake offset (only during PLAYING or GAME_OVER states)
             let offsetX = 0;
             let offsetY = 0;
-            if (this.screenShake > 0) {
+            if (this.screenShake > 0 && 
+                (this.currentState === GameState.PLAYING || this.currentState === GameState.GAME_OVER)) {
                 offsetX = (Math.random() - 0.5) * this.screenShakeIntensity;
                 offsetY = (Math.random() - 0.5) * this.screenShakeIntensity;
             }
@@ -2557,8 +2568,8 @@ class GameEngine {
             this.ctx.fillStyle = '#1a1a2e';
             this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
             
-            // Flash effect overlay
-            if (this.flashEffect > 0) {
+            // Flash effect overlay (only during PLAYING state)
+            if (this.flashEffect > 0 && this.currentState === GameState.PLAYING) {
                 this.ctx.fillStyle = `rgba(255, 255, 255, ${this.flashEffect * 10})`;
                 this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
             }
@@ -2900,10 +2911,15 @@ class GameEngine {
         this.particleSystem.particles = [];
         
         // Reset visual effects
-        this.screenShake = 0;
-        this.flashEffect = 0;
+        this.resetVisualEffects();
         
         console.log('Game Started');
+    }
+    
+    resetVisualEffects() {
+        this.screenShake = 0;
+        this.screenShakeIntensity = 0;
+        this.flashEffect = 0;
     }
     
     gameOver() {
@@ -3230,12 +3246,12 @@ class GameEngine {
             }
         }
         
-        // Player Stats
+        // Player Stats (positioned above back button to avoid overlap)
         if (this.playerStats) {
             this.ctx.fillStyle = '#fff';
             this.ctx.font = '24px Arial';
             this.ctx.textAlign = 'center';
-            this.ctx.fillText('Stats:', GAME_WIDTH / 2, 950);
+            this.ctx.fillText('Stats:', GAME_WIDTH / 2, 850);
             
             const statsText = [
                 `Games: ${this.playerStats.totalGamesPlayed}`,
@@ -3244,7 +3260,7 @@ class GameEngine {
                 `Playtime: ${Math.floor(this.playerStats.totalPlaytime / 60)}m`
             ];
             
-            let y = 985;
+            let y = 885;
             for (const text of statsText) {
                 this.ctx.fillStyle = '#aaa';
                 this.ctx.font = '18px Arial';
@@ -3253,12 +3269,12 @@ class GameEngine {
             }
         }
         
-        // Achievements display
+        // Achievements display (positioned above stats to avoid overlap)
         if (this.achievements.length > 0) {
-            this.ctx.fillStyle = (colors && colors.text) ? colors.text : '#fff';
+            this.ctx.fillStyle = '#fff';
             this.ctx.font = '24px Arial';
             this.ctx.textAlign = 'center';
-            this.ctx.fillText('Achievements:', GAME_WIDTH / 2, 1100);
+            this.ctx.fillText('Achievements:', GAME_WIDTH / 2, 1000);
             
             const achievementNames = {
                 'firstPlay': 'First Play',
@@ -3266,7 +3282,7 @@ class GameEngine {
                 'combo50': '50 Combo'
             };
             
-            let y = 1135;
+            let y = 1035;
             for (const achievementId of this.achievements) {
                 const name = achievementNames[achievementId] || achievementId;
                 this.ctx.fillStyle = '#ffd700';
