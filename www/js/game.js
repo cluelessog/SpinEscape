@@ -789,7 +789,7 @@ class Player {
     constructor(x, y) {
         this.x = x;
         this.y = y;
-        this.radius = 50; // Increased from 30 to make circle wider
+        this.radius = 66.125; // Increased by 15% more (57.5 * 1.15 = 66.125)
         this.angle = 0; // Rotation angle in radians
         this.rotationSpeed = 0; // Radians per second
         this.maxRotationSpeed = 5; // Maximum rotation speed
@@ -914,7 +914,7 @@ class Player {
         ctx.translate(this.x, this.y);
         
         const dotCount = 6;
-        const dotRadius = 7; // Increased by 1px more
+        const dotRadius = 8.47; // Increased by 10% more (7.7 * 1.1 = 8.47)
         const dotColor = this.hitFlash > 0 ? '#ff4444' : '#f1f6f7'; // Aqua Haze, red on hit
         
         ctx.fillStyle = dotColor;
@@ -959,7 +959,12 @@ class Projectile {
         this.y = y;
         this.targetX = targetX;
         this.targetY = targetY;
-        this.radius = 18; // Increased from 12 to make projectiles more visible
+        // Projectile size calculated to pass through gap between dots
+        // Gap angle: Math.PI / 6 (30 degrees)
+        // Gap width at circle radius (66.125px): 66.125 * (Math.PI / 6) ≈ 34.6px
+        // Projectile diameter should be ~85% of gap width for comfortable passage: ~29px
+        // Projectile radius: ~14.5px (rounded to 15px for visibility)
+        this.radius = 15; // Sized to pass through gap between dots
         this.speed = speed;
         this.active = true;
         this.dodged = false; // Track if projectile was dodged
@@ -2321,6 +2326,7 @@ class GameEngine {
         this.sliderHandleRadius = 14; // Handle/thumb radius
         this.sliderColor = this.darkenColor('#51caf5', 20); // One shade darker than background
         this.sliderActive = false; // Whether joystick is currently being dragged
+        this.joystickGrabbed = false; // Whether joystick was initially grabbed (stays true even if touch moves outside)
         this.sliderAngle = 0; // Current joystick angle in radians (0 to 2π)
         this.sliderHandleX = this.sliderCenterX; // Handle X position (relative to center)
         this.sliderHandleY = this.sliderCenterY; // Handle Y position (relative to center)
@@ -2494,33 +2500,46 @@ class GameEngine {
         
         // Handle joystick input for rotation control
         const touch = this.inputManager.getPrimaryTouch();
+        const wasJustPressed = this.inputManager.wasJustPressed;
+        
         if (touch) {
-            // Check if touch is within joystick area (larger area for easier activation)
-            const touchDistance = Math.sqrt(
-                Math.pow(touch.x - this.sliderCenterX, 2) + 
-                Math.pow(touch.y - this.sliderCenterY, 2)
-            );
+            // Check if touch just started within joystick area (initial activation)
+            if (wasJustPressed) {
+                const touchDistance = Math.sqrt(
+                    Math.pow(touch.x - this.sliderCenterX, 2) + 
+                    Math.pow(touch.y - this.sliderCenterY, 2)
+                );
+                
+                // Activate joystick if touch starts within extended activation area
+                if (touchDistance <= this.sliderRadius + 30) {
+                    this.joystickGrabbed = true;
+                    this.sliderActive = true;
+                }
+            }
             
-            if (touchDistance <= this.sliderRadius + 30) { // Extended activation area
+            // If joystick is grabbed, continue tracking touch even if it moves outside circle
+            if (this.joystickGrabbed) {
                 // Calculate offset from center
                 let dx = touch.x - this.sliderCenterX;
                 let dy = touch.y - this.sliderCenterY;
                 const distance = Math.sqrt(dx * dx + dy * dy);
                 
                 // Clamp handle position to joystick radius (constrain within circle)
+                // But continue tracking touch position even if outside
                 if (distance > this.sliderRadius) {
                     dx = (dx / distance) * this.sliderRadius;
                     dy = (dy / distance) * this.sliderRadius;
                 }
                 
-                // Set target handle position
+                // Set target handle position (constrained to circle)
                 this.targetHandleX = this.sliderCenterX + dx;
                 this.targetHandleY = this.sliderCenterY + dy;
                 this.sliderActive = true;
             }
         } else {
-            // Touch ended - return handle to center
+            // Touch ended - release joystick and return handle to center
             this.sliderActive = false;
+            this.joystickGrabbed = false;
             this.targetHandleX = this.sliderCenterX;
             this.targetHandleY = this.sliderCenterY;
         }
@@ -2721,27 +2740,105 @@ class GameEngine {
             const dy = projectile.y - this.player.y;
             const distance = Math.sqrt(dx * dx + dy * dy);
             
-            // Check if projectile has reached the circle radius
+            // Enhanced collision detection for projectiles passing through gaps
             const circleRadius = this.player.radius;
             const projectileRadius = projectile.radius;
-            const collisionRadius = circleRadius + projectileRadius;
+            const dotRadius = 8.47; // Current dot radius (from render method)
+            const gapAngle = Math.PI / 6; // Gap angle (30 degrees)
             
-            // Projectile reaches circle when distance <= circleRadius + projectileRadius
-            if (distance <= collisionRadius) {
+            // Calculate gap width at circle radius (arc length)
+            const gapWidthAtCircle = circleRadius * gapAngle; // ~34.6px
+            
+            // Projectile can interact when it reaches the circle boundary
+            // Check if projectile is at or past the circle radius
+            const collisionThreshold = circleRadius + projectileRadius;
+            
+            if (distance <= collisionThreshold) {
                 // Calculate angle from center to projectile (world coordinates)
                 const projectileAngle = Math.atan2(dy, dx);
                 
-                // Check if projectile hits solid part or passes through gap
+                // Check if projectile angle aligns with a gap or hits a solid part (dot)
                 const isSolid = this.player.isSolidAtAngle(projectileAngle);
                 
                 if (isSolid) {
-                    // Hit solid part - collision!
-                    this.handleCollision(projectile);
-                    break; // Only handle one collision per frame
+                    // Check if projectile actually intersects with a dot
+                    // Calculate distance from projectile center to each dot center
+                    const dotCount = 6;
+                    const dotSpacing = Math.PI * 2 / dotCount;
+                    let minDotDistance = Infinity;
+                    
+                    for (let i = 0; i < dotCount; i++) {
+                        const dotAngle = (i * dotSpacing) + this.player.angle;
+                        const dotX = this.player.x + Math.cos(dotAngle) * circleRadius;
+                        const dotY = this.player.y + Math.sin(dotAngle) * circleRadius;
+                        
+                        const dotDistance = Math.sqrt(
+                            Math.pow(projectile.x - dotX, 2) + 
+                            Math.pow(projectile.y - dotY, 2)
+                        );
+                        
+                        minDotDistance = Math.min(minDotDistance, dotDistance);
+                    }
+                    
+                    // Collision occurs if projectile overlaps with dot
+                    // Use circle-to-circle collision: distance <= sum of radii
+                    const dotCollisionRadius = dotRadius + projectileRadius;
+                    if (minDotDistance <= dotCollisionRadius) {
+                        // Hit solid part (dot) - collision!
+                        this.handleCollision(projectile);
+                        break; // Only handle one collision per frame
+                    }
+                    // If projectile is in solid angle but doesn't hit dot, it might be passing through
+                    // This can happen if projectile is large enough to pass between dots
                 } else {
-                    // Passed through gap - dodged!
-                    this.handleDodge(projectile);
-                    // Don't break here - allow multiple dodges in same frame
+                    // Projectile angle is in a gap - check if it can pass through
+                    // Calculate if projectile fits through gap at its current distance
+                    const gapWidthAtDistance = distance * gapAngle;
+                    const projectileDiameter = projectileRadius * 2;
+                    
+                    // Projectile passes through if its diameter fits within gap width
+                    // Add small tolerance (5%) for easier passage
+                    if (projectileDiameter <= gapWidthAtDistance * 1.05) {
+                        // Passed through gap - dodged!
+                        this.handleDodge(projectile);
+                        // Don't break here - allow multiple dodges in same frame
+                    } else {
+                        // Projectile too large for gap - might hit adjacent dots
+                        // Check if it hits either adjacent dot
+                        const dotCount = 6;
+                        const dotSpacing = Math.PI * 2 / dotCount;
+                        const relativeAngle = projectileAngle - this.player.angle;
+                        
+                        // Normalize relative angle
+                        let normalizedAngle = relativeAngle;
+                        while (normalizedAngle < 0) normalizedAngle += Math.PI * 2;
+                        while (normalizedAngle >= Math.PI * 2) normalizedAngle -= Math.PI * 2;
+                        
+                        // Find which gap this angle is in
+                        const gapIndex = Math.floor(normalizedAngle / gapAngle);
+                        const gapCenterAngle = (gapIndex * dotSpacing) + (dotSpacing / 2);
+                        
+                        // Check collision with dots adjacent to this gap
+                        const leftDotIndex = gapIndex;
+                        const rightDotIndex = (gapIndex + 1) % dotCount;
+                        
+                        for (const dotIndex of [leftDotIndex, rightDotIndex]) {
+                            const dotAngle = (dotIndex * dotSpacing) + this.player.angle;
+                            const dotX = this.player.x + Math.cos(dotAngle) * circleRadius;
+                            const dotY = this.player.y + Math.sin(dotAngle) * circleRadius;
+                            
+                            const dotDistance = Math.sqrt(
+                                Math.pow(projectile.x - dotX, 2) + 
+                                Math.pow(projectile.y - dotY, 2)
+                            );
+                            
+                            if (dotDistance <= dotRadius + projectileRadius) {
+                                // Hit adjacent dot while trying to pass through gap
+                                this.handleCollision(projectile);
+                                break; // Only handle one collision per frame
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2912,11 +3009,11 @@ class GameEngine {
         this.ctx.arc(this.sliderCenterX, this.sliderCenterY, this.sliderRadius, 0, Math.PI * 2);
         this.ctx.stroke();
         
-        // Draw center dot (dead zone indicator)
+        // Draw center dot (dead zone indicator) - 10% bigger
         this.ctx.fillStyle = this.sliderColor;
         this.ctx.globalAlpha = 0.3;
         this.ctx.beginPath();
-        this.ctx.arc(this.sliderCenterX, this.sliderCenterY, 5, 0, Math.PI * 2);
+        this.ctx.arc(this.sliderCenterX, this.sliderCenterY, 5.5, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.globalAlpha = 1.0;
         
@@ -3647,6 +3744,7 @@ class GameEngine {
         this.targetHandleX = this.sliderCenterX;
         this.targetHandleY = this.sliderCenterY;
         this.sliderActive = false;
+        this.joystickGrabbed = false;
         
         // Clear floating scores
         this.floatingScores = [];
