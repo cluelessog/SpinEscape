@@ -1005,48 +1005,208 @@ class Projectile {
 
 // ============================================================================
 // PARTICLE SYSTEM CLASS
+// Enhanced with particle pooling, trails, sparkles, and animations
 // ============================================================================
 
 class ParticleSystem {
     constructor() {
         this.particles = [];
-        this.maxParticles = 50;
+        this.particlePool = []; // Pool for reuse
+        this.maxParticles = 100; // Increased for better effects
+        this.activeParticleCount = 0;
+        
+        // Pre-create particle pool for performance
+        this.initializePool(100);
     }
     
+    /**
+     * Initialize particle pool to avoid GC issues
+     */
+    initializePool(size) {
+        for (let i = 0; i < size; i++) {
+            this.particlePool.push({
+                x: 0, y: 0, vx: 0, vy: 0,
+                life: 0, maxLife: 0, size: 0,
+                color: '', type: '', rotation: 0, rotationSpeed: 0
+            });
+        }
+    }
+    
+    /**
+     * Get a particle from pool or create new one
+     */
+    acquireParticle() {
+        if (this.particlePool.length > 0) {
+            return this.particlePool.pop();
+        }
+        return {
+            x: 0, y: 0, vx: 0, vy: 0,
+            life: 0, maxLife: 0, size: 0,
+            color: '', type: '', rotation: 0, rotationSpeed: 0
+        };
+    }
+    
+    /**
+     * Return particle to pool
+     */
+    releaseParticle(particle) {
+        if (this.particlePool.length < 200) { // Limit pool size
+            this.particlePool.push(particle);
+        }
+    }
+    
+    /**
+     * Spawn explosion effect
+     */
     spawnExplosion(x, y, count = 12, baseColor = '#ff4444') {
-        for (let i = 0; i < count && this.particles.length < this.maxParticles; i++) {
-            const angle = (Math.PI * 2 * i) / count;
+        for (let i = 0; i < count && this.activeParticleCount < this.maxParticles; i++) {
+            const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
             const speed = 100 + Math.random() * 150;
-            // Use provided color or generate random colors for default explosions
             let particleColor = baseColor;
             if (baseColor === '#ff4444') {
                 // Default: yellow to orange for explosions
                 particleColor = `hsl(${Math.random() * 60}, 100%, 60%)`;
             }
-            this.particles.push({
-                x: x,
-                y: y,
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed,
-                life: 0.5, // 500ms lifetime
-                maxLife: 0.5,
-                size: 3 + Math.random() * 4,
-                color: particleColor
-            });
+            
+            const p = this.acquireParticle();
+            p.x = x;
+            p.y = y;
+            p.vx = Math.cos(angle) * speed;
+            p.vy = Math.sin(angle) * speed;
+            p.life = 0.5;
+            p.maxLife = 0.5;
+            p.size = 3 + Math.random() * 4;
+            p.color = particleColor;
+            p.type = 'explosion';
+            p.rotation = Math.random() * Math.PI * 2;
+            p.rotationSpeed = (Math.random() - 0.5) * 10;
+            
+            this.particles.push(p);
+            this.activeParticleCount++;
         }
+    }
+    
+    /**
+     * Spawn trail effect for moving objects
+     */
+    spawnTrail(x, y, vx, vy, color = '#4a9eff', count = 3) {
+        for (let i = 0; i < count && this.activeParticleCount < this.maxParticles; i++) {
+            const p = this.acquireParticle();
+            p.x = x + (Math.random() - 0.5) * 10;
+            p.y = y + (Math.random() - 0.5) * 10;
+            p.vx = vx * 0.3 + (Math.random() - 0.5) * 30;
+            p.vy = vy * 0.3 + (Math.random() - 0.5) * 30;
+            p.life = 0.3;
+            p.maxLife = 0.3;
+            p.size = 2 + Math.random() * 2;
+            p.color = color;
+            p.type = 'trail';
+            p.rotation = 0;
+            p.rotationSpeed = 0;
+            
+            this.particles.push(p);
+            this.activeParticleCount++;
+        }
+    }
+    
+    /**
+     * Spawn sparkle/star effect for combos
+     */
+    spawnSparkle(x, y, count = 8, color = '#ffd700') {
+        for (let i = 0; i < count && this.activeParticleCount < this.maxParticles; i++) {
+            const angle = (Math.PI * 2 * i) / count;
+            const speed = 50 + Math.random() * 50;
+            
+            const p = this.acquireParticle();
+            p.x = x;
+            p.y = y;
+            p.vx = Math.cos(angle) * speed;
+            p.vy = Math.sin(angle) * speed;
+            p.life = 0.8;
+            p.maxLife = 0.8;
+            p.size = 2 + Math.random() * 3;
+            p.color = color;
+            p.type = 'sparkle';
+            p.rotation = Math.random() * Math.PI * 2;
+            p.rotationSpeed = (Math.random() - 0.5) * 15;
+            
+            this.particles.push(p);
+            this.activeParticleCount++;
+        }
+    }
+    
+    /**
+     * Spawn text particle for score pop-ups
+     */
+    spawnText(text, x, y, color = '#ffd700') {
+        // Text particles are handled separately in floatingScores
+        // This is for particle-based text effects if needed
+        this.spawnSparkle(x, y, 6, color);
+    }
+    
+    /**
+     * Spawn spawn animation (when object appears)
+     */
+    spawnSpawnEffect(x, y, color = '#4a9eff') {
+        for (let i = 0; i < 16 && this.activeParticleCount < this.maxParticles; i++) {
+            const angle = (Math.PI * 2 * i) / 16;
+            const speed = 30 + Math.random() * 20;
+            
+            const p = this.acquireParticle();
+            p.x = x;
+            p.y = y;
+            p.vx = Math.cos(angle) * speed;
+            p.vy = Math.sin(angle) * speed;
+            p.life = 0.4;
+            p.maxLife = 0.4;
+            p.size = 2 + Math.random() * 2;
+            p.color = color;
+            p.type = 'spawn';
+            p.rotation = 0;
+            p.rotationSpeed = 0;
+            
+            this.particles.push(p);
+            this.activeParticleCount++;
+        }
+    }
+    
+    /**
+     * Spawn destroy animation (when object disappears)
+     */
+    spawnDestroyEffect(x, y, color = '#ff4444') {
+        this.spawnExplosion(x, y, 8, color);
     }
     
     update(deltaTime) {
         for (let i = this.particles.length - 1; i >= 0; i--) {
             const p = this.particles[i];
+            
+            // Update position
             p.x += p.vx * deltaTime;
             p.y += p.vy * deltaTime;
-            p.vx *= 0.95; // Friction
-            p.vy *= 0.95;
+            
+            // Update rotation
+            if (p.rotationSpeed !== 0) {
+                p.rotation += p.rotationSpeed * deltaTime;
+            }
+            
+            // Apply friction (different for different types)
+            if (p.type === 'trail') {
+                p.vx *= 0.9;
+                p.vy *= 0.9;
+            } else {
+                p.vx *= 0.95;
+                p.vy *= 0.95;
+            }
+            
+            // Update life
             p.life -= deltaTime;
             
+            // Remove dead particles
             if (p.life <= 0) {
+                this.releaseParticle(p);
                 this.particles.splice(i, 1);
+                this.activeParticleCount--;
             }
         }
     }
@@ -1054,11 +1214,32 @@ class ParticleSystem {
     render(ctx) {
         for (const p of this.particles) {
             const alpha = p.life / p.maxLife;
-            ctx.fillStyle = p.color;
+            ctx.save();
             ctx.globalAlpha = alpha;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.fillStyle = p.color;
+            
+            if (p.type === 'sparkle') {
+                // Draw star shape for sparkles
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.rotation);
+                ctx.beginPath();
+                for (let i = 0; i < 5; i++) {
+                    const angle = (Math.PI * 2 * i) / 5 - Math.PI / 2;
+                    const x = Math.cos(angle) * p.size;
+                    const y = Math.sin(angle) * p.size;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                ctx.fill();
+            } else {
+                // Draw circle for other particles
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            ctx.restore();
         }
         ctx.globalAlpha = 1.0;
     }
@@ -2009,6 +2190,8 @@ class GameEngine {
         // Game objects
         this.player = null;
         this.score = 0;
+        this.displayScore = 0; // Animated score for roll-up effect
+        this.scoreAnimationSpeed = 0.2; // How fast score animates (0-1, higher = faster)
         this.combo = 0;
         this.comboMultiplier = 1;
         this.bestComboThisGame = 0;
@@ -2258,6 +2441,9 @@ class GameEngine {
         // Update floating scores
         this.updateFloatingScores(deltaTime);
         
+        // Update score animation (roll-up effect)
+        this.updateScoreAnimation(deltaTime);
+        
         // Update visual effects
         this.updateVisualEffects(deltaTime);
         
@@ -2272,6 +2458,19 @@ class GameEngine {
         // Update velocity-based movement using Physics class
         for (const projectile of activeProjectiles) {
             if (!projectile.active) continue;
+            
+            // Spawn trail effect for moving projectiles
+            if (projectile.vx !== 0 || projectile.vy !== 0) {
+                const trailColor = this.getProjectileTrailColor(projectile);
+                this.particleSystem.spawnTrail(
+                    projectile.x, 
+                    projectile.y, 
+                    projectile.vx, 
+                    projectile.vy, 
+                    trailColor, 
+                    2
+                );
+            }
             
             // Update velocity-based movement using Physics class
             this.physics.updateVelocity(projectile, deltaTime);
@@ -2372,7 +2571,26 @@ class GameEngine {
             this.currentProjectileSpeed
         );
         
+        // Spawn animation effect (use default color since projectile velocity not set yet)
+        const spawnColor = '#4a9eff'; // Default blue
+        this.particleSystem.spawnSpawnEffect(spawnX, spawnY, spawnColor);
+        
         // Projectile spawned successfully
+    }
+    
+    /**
+     * Get trail color based on projectile speed
+     */
+    getProjectileTrailColor(projectile) {
+        const speed = Math.sqrt(projectile.vx * projectile.vx + projectile.vy * projectile.vy);
+        // Faster projectiles = brighter/more intense color
+        if (speed > 300) {
+            return '#ff0080'; // Hot pink for fast
+        } else if (speed > 200) {
+            return '#ff4444'; // Red for medium-fast
+        } else {
+            return '#4a9eff'; // Blue for normal
+        }
     }
     
     checkCollisions() {
@@ -2455,6 +2673,11 @@ class GameEngine {
         // Particle effect for successful dodge
         this.particleSystem.spawnExplosion(projectile.x, projectile.y, 8, '#0f0');
         
+        // Sparkle effect for combos (every 10 dodges)
+        if (this.combo % 10 === 0 && this.combo > 0) {
+            this.particleSystem.spawnSparkle(projectile.x, projectile.y, 12, '#ffd700');
+        }
+        
         // Release projectile back to pool
         this.projectilePool.release(projectile);
     }
@@ -2462,6 +2685,7 @@ class GameEngine {
     handleCollision(projectile) {
         // Trigger visual effects
         this.particleSystem.spawnExplosion(projectile.x, projectile.y, 12);
+        this.particleSystem.spawnDestroyEffect(projectile.x, projectile.y, '#ff4444');
         this.player.triggerHitFlash();
         this.screenShake = 0.3; // 300ms shake
         this.screenShakeIntensity = 10;
@@ -2479,6 +2703,17 @@ class GameEngine {
         
         // Game over
         this.gameOver();
+    }
+    
+    updateScoreAnimation(deltaTime) {
+        // Animate displayScore toward actual score (roll-up effect)
+        if (this.displayScore < this.score) {
+            const difference = this.score - this.displayScore;
+            const increment = Math.max(1, difference * this.scoreAnimationSpeed);
+            this.displayScore = Math.min(this.displayScore + increment, this.score);
+        } else {
+            this.displayScore = this.score; // Keep in sync
+        }
     }
     
     updateVisualEffects(deltaTime) {
@@ -2544,6 +2779,9 @@ class GameEngine {
         const oldScore = this.score;
         this.score += finalPoints;
         
+        // Animate score roll-up (displayScore will catch up to score)
+        // The displayScore will animate toward this.score in updateScoreAnimation()
+        
         // Debug logging
         console.log(`Score updated: ${oldScore} + ${finalPoints} = ${this.score} (combo: ${this.combo}, multiplier: ${this.comboMultiplier}x, difficulty: ${this.difficulty})`);
         
@@ -2562,14 +2800,34 @@ class GameEngine {
     }
     
     spawnFloatingScore(points, x, y) {
+        // Determine color based on combo multiplier
+        let color = '#ffd700'; // Gold default
+        let fontSize = 36;
+        
+        if (this.comboMultiplier >= 5) {
+            color = '#ff00ff'; // Magenta for 5x
+            fontSize = 48;
+        } else if (this.comboMultiplier >= 3) {
+            color = '#00ffff'; // Cyan for 3x+
+            fontSize = 42;
+        } else if (this.comboMultiplier >= 2) {
+            color = '#ffff00'; // Yellow for 2x+
+            fontSize = 38;
+        }
+        
         this.floatingScores.push({
             x: x,
             y: y,
             text: `+${points}`,
-            life: 1.0, // 1 second
-            maxLife: 1.0,
-            velocityY: -100, // Move upward
-            alpha: 1.0
+            life: 1.2, // 1.2 seconds
+            maxLife: 1.2,
+            velocityY: -120, // Move upward faster
+            velocityX: (Math.random() - 0.5) * 30, // Slight horizontal drift
+            alpha: 1.0,
+            scale: 0.5, // Start small
+            maxScale: 1.2, // Grow then shrink
+            color: color,
+            fontSize: fontSize
         });
     }
     
@@ -2577,8 +2835,25 @@ class GameEngine {
         for (let i = this.floatingScores.length - 1; i >= 0; i--) {
             const floating = this.floatingScores[i];
             floating.life -= deltaTime;
+            
+            // Update position with easing
             floating.y += floating.velocityY * deltaTime;
-            floating.alpha = floating.life / floating.maxLife;
+            floating.x += floating.velocityX * deltaTime;
+            floating.velocityY *= 0.98; // Slow down over time
+            floating.velocityX *= 0.95;
+            
+            // Scale animation: grow then shrink
+            const lifeRatio = floating.life / floating.maxLife;
+            if (lifeRatio > 0.5) {
+                // Growing phase
+                floating.scale = 0.5 + (1 - lifeRatio) * 1.4; // 0.5 to 1.2
+            } else {
+                // Shrinking phase
+                floating.scale = 0.5 + lifeRatio * 0.7; // 1.2 to 0.5
+            }
+            
+            // Fade out
+            floating.alpha = Math.min(lifeRatio * 1.5, 1.0); // Fade faster at end
             
             if (floating.life <= 0) {
                 this.floatingScores.splice(i, 1);
@@ -2590,10 +2865,26 @@ class GameEngine {
         for (const floating of this.floatingScores) {
             this.ctx.save();
             this.ctx.globalAlpha = floating.alpha;
-            this.ctx.fillStyle = '#ffd700';
-            this.ctx.font = 'bold 36px Arial';
+            
+            // Shadow for depth
+            this.ctx.shadowBlur = 8;
+            this.ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            this.ctx.shadowOffsetX = 2;
+            this.ctx.shadowOffsetY = 2;
+            
+            // Scale transform
+            this.ctx.translate(floating.x, floating.y);
+            this.ctx.scale(floating.scale, floating.scale);
+            
+            // Text styling
+            this.ctx.fillStyle = floating.color;
+            this.ctx.font = `bold ${floating.fontSize}px Arial`;
             this.ctx.textAlign = 'center';
-            this.ctx.fillText(floating.text, floating.x, floating.y);
+            this.ctx.textBaseline = 'middle';
+            
+            // Draw text
+            this.ctx.fillText(floating.text, 0, 0);
+            
             this.ctx.restore();
         }
     }
@@ -3053,7 +3344,9 @@ class GameEngine {
         this.ctx.fillStyle = theme.colors.text || '#fff';
         this.ctx.font = 'bold 60px Arial';
         this.ctx.textAlign = 'center';
-        this.ctx.fillText(`Score: ${this.score}`, GAME_WIDTH / 2, 80);
+        // Use displayScore for animated roll-up effect
+        const scoreText = Math.floor(this.displayScore).toLocaleString();
+        this.ctx.fillText(`Score: ${scoreText}`, GAME_WIDTH / 2, 80);
         this.ctx.restore();
         
         // Combo multiplier display with enhanced styling
@@ -3262,6 +3555,8 @@ class GameEngine {
         
         this.currentState = GameState.PLAYING;
         this.score = 0;
+        this.displayScore = 0; // Animated score for roll-up effect
+        this.scoreAnimationSpeed = 0.2; // How fast score animates (0-1, higher = faster)
         this.combo = 0;
         this.comboMultiplier = 1;
         this.bestComboThisGame = 0;
