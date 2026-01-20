@@ -2589,12 +2589,6 @@ class GameEngine {
                 }
             }
         }
-        
-        // Fallback: tap anywhere or space key to retry
-        if (this.inputManager.wasJustPressed || this.inputManager.isKeyPressed('Space')) {
-            this.vibrationManager.vibrateTap();
-            this.startGame();
-        }
     }
     
     shareScore() {
@@ -2980,14 +2974,6 @@ class GameEngine {
         if (this.bestComboThisGame > 0) {
             this.ctx.font = '28px Arial';
             this.ctx.fillText(`Best Combo: ${this.bestComboThisGame}`, GAME_WIDTH / 2, 390);
-        }
-        
-        // Player stats
-        if (this.playerStats) {
-            this.ctx.font = '20px Arial';
-            this.ctx.fillStyle = '#888';
-            this.ctx.fillText(`Best Combo Ever: ${this.playerStats.bestCombo}`, GAME_WIDTH / 2, 420);
-            this.ctx.fillText(`Avg Score: ${this.playerStats.averageScore.toLocaleString()}`, GAME_WIDTH / 2, 445);
         }
         
         // RETRY button (green, large)
