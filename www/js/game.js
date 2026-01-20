@@ -798,17 +798,23 @@ class Player {
         this.color = '#4a9eff';
         this.hitFlash = 0; // Flash effect timer
         
+        // Wobble effect: circle expands when rotating
+        this.wobbleScale = 1.0; // Current scale (1.0 = normal size)
+        this.targetWobbleScale = 1.0; // Target scale based on rotation speed
+        this.wobbleSpeed = 8.0; // How fast wobble transitions (higher = faster)
+        this.maxWobbleScale = 1.3; // Maximum expansion (30% larger)
+        
         // Gap system: Define gap sectors (angles where projectiles can pass through)
-        // With 5 dots, we have 5 gaps between them (projectiles pass between dots)
+        // With 6 dots, we have 6 gaps between them (projectiles pass between dots)
         // Each gap is between two dots, so gaps are evenly spaced
-        this.gapCount = 5; // Number of gaps (matches 5 dots)
+        this.gapCount = 6; // Number of gaps (matches 6 dots)
         this.gapSize = Math.PI / 6; // Each gap is 30 degrees (PI/6 radians) - wide enough for projectiles
         this.solidSize = (Math.PI * 2 - (this.gapCount * this.gapSize)) / this.gapCount; // Size of solid sectors (dots)
         
         // Calculate gap positions (relative to angle 0)
         // Gaps are positioned between dots, so offset by half the dot spacing
         this.gaps = [];
-        const dotSpacing = Math.PI * 2 / 5; // 5 dots evenly spaced
+        const dotSpacing = Math.PI * 2 / 6; // 6 dots evenly spaced
         for (let i = 0; i < this.gapCount; i++) {
             // Gap starts between dot i and dot i+1
             const gapStart = (i * dotSpacing) + (dotSpacing / 2) - (this.gapSize / 2);
@@ -884,6 +890,19 @@ class Player {
         while (this.angle > Math.PI * 2) this.angle -= Math.PI * 2;
         while (this.angle < 0) this.angle += Math.PI * 2;
         
+        // Update wobble effect based on rotation speed
+        // Calculate target scale: faster rotation = larger scale
+        const absRotationSpeed = Math.abs(this.rotationSpeed);
+        const normalizedSpeed = Math.min(absRotationSpeed / this.maxRotationSpeed, 1.0); // 0 to 1
+        this.targetWobbleScale = 1.0 + (normalizedSpeed * (this.maxWobbleScale - 1.0)); // 1.0 to maxWobbleScale
+        
+        // Smoothly interpolate current scale towards target scale
+        const scaleDiff = this.targetWobbleScale - this.wobbleScale;
+        this.wobbleScale += scaleDiff * this.wobbleSpeed * deltaTime;
+        
+        // Clamp scale to valid range
+        this.wobbleScale = Math.max(1.0, Math.min(this.maxWobbleScale, this.wobbleScale));
+        
         // Update hit flash
         if (this.hitFlash > 0) {
             this.hitFlash -= deltaTime;
@@ -891,22 +910,26 @@ class Player {
     }
     
     render(ctx) {
-        // Minimal design: Draw 5 grey dots arranged in a perfect circle
+        // Minimal design: Draw 6 grey dots arranged in a perfect circle
         ctx.save();
         ctx.translate(this.x, this.y);
         
-        const dotCount = 5;
-        const dotRadius = 5; // Reverted to original size
-        const dotColor = this.hitFlash > 0 ? '#ff4444' : '#999999'; // Grey, red on hit
+        const dotCount = 6;
+        const dotRadius = 7; // Increased by 1px more
+        const dotColor = this.hitFlash > 0 ? '#ff4444' : '#f1f6f7'; // Aqua Haze, red on hit
         
         ctx.fillStyle = dotColor;
+        
+        // Apply wobble scale: expand circle when rotating
+        const scaledRadius = this.radius * this.wobbleScale;
         
         // Draw each dot arranged in a circle
         for (let i = 0; i < dotCount; i++) {
             // Calculate angle for each dot (evenly spaced around circle)
             const angle = (i * Math.PI * 2 / dotCount) + this.angle;
-            const dotX = Math.cos(angle) * this.radius;
-            const dotY = Math.sin(angle) * this.radius;
+            // Apply wobble scale to dot position
+            const dotX = Math.cos(angle) * scaledRadius;
+            const dotY = Math.sin(angle) * scaledRadius;
             
             // Draw circle for this dot
             ctx.beginPath();
@@ -951,7 +974,7 @@ class Projectile {
         this.vy = distance > 0 ? (dy / distance) * speed : 0;
         
         // Color will be set based on distance in render()
-        this.color = '#ff3300'; // Default fire red
+        this.color = '#ffffff'; // Flat white
     }
     
     update(deltaTime) {
@@ -999,28 +1022,9 @@ class Projectile {
     render(ctx, playerX = null, playerY = null) {
         if (!this.active) return;
         
-        // Calculate distance-based color if player position is provided
-        let projectileColor = this.color;
+        // Use flat white color for projectiles
+        let projectileColor = this.color; // #ffffff (Flat white)
         let glowIntensity = 10;
-        
-        if (playerX !== null && playerY !== null) {
-            const dx = this.x - playerX;
-            const dy = this.y - playerY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            const normalizedDistance = Math.min(distance / 200, 1); // Normalize to 0-1 (200px = far)
-            
-            if (normalizedDistance > 0.5) {
-                // Far away (>100px): Fire red gradient
-                const farFactor = (normalizedDistance - 0.5) * 2; // 0 to 1 as distance goes from 100px to 200px
-                projectileColor = this.interpolateColor('#ff3300', '#ff6600', farFactor);
-            } else {
-                // Close (<100px): Transition from orange/yellow to bright white
-                const closeFactor = normalizedDistance * 2; // 0 to 1 as distance goes from 0px to 100px
-                projectileColor = this.interpolateColor('#ffaa00', '#ffffff', closeFactor);
-                // Increase glow intensity as projectile approaches
-                glowIntensity = 10 + (1 - normalizedDistance) * 20; // 10 to 30
-            }
-        }
         
         // Render projectile with distance-based color
         ctx.save();
@@ -3282,38 +3286,10 @@ class GameEngine {
     }
     
     renderPlaying() {
-        // Minimal design: Dark background (draw FIRST before everything else)
-        this.ctx.fillStyle = '#0A0E27';
+        // Minimal design: Picton Blue background (draw FIRST before everything else)
+        this.ctx.fillStyle = '#51caf5';
         this.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
         
-        // Draw white phone frame with rounded corners
-        const frameMargin = 20;
-        const frameRadius = 25;
-        const frameX = frameMargin;
-        const frameY = frameMargin;
-        const frameWidth = GAME_WIDTH - (frameMargin * 2);
-        const frameHeight = GAME_HEIGHT - (frameMargin * 2);
-        
-        this.ctx.strokeStyle = '#ffffff';
-        this.ctx.lineWidth = 2;
-        this.ctx.beginPath();
-        // Use roundRect if available, otherwise draw manually
-        if (this.ctx.roundRect) {
-            this.ctx.roundRect(frameX, frameY, frameWidth, frameHeight, frameRadius);
-        } else {
-            // Fallback: draw rounded rectangle manually
-            this.ctx.moveTo(frameX + frameRadius, frameY);
-            this.ctx.lineTo(frameX + frameWidth - frameRadius, frameY);
-            this.ctx.quadraticCurveTo(frameX + frameWidth, frameY, frameX + frameWidth, frameY + frameRadius);
-            this.ctx.lineTo(frameX + frameWidth, frameY + frameHeight - frameRadius);
-            this.ctx.quadraticCurveTo(frameX + frameWidth, frameY + frameHeight, frameX + frameWidth - frameRadius, frameY + frameHeight);
-            this.ctx.lineTo(frameX + frameRadius, frameY + frameHeight);
-            this.ctx.quadraticCurveTo(frameX, frameY + frameHeight, frameX, frameY + frameHeight - frameRadius);
-            this.ctx.lineTo(frameX, frameY + frameRadius);
-            this.ctx.quadraticCurveTo(frameX, frameY, frameX + frameRadius, frameY);
-            this.ctx.closePath();
-        }
-        this.ctx.stroke();
         
         // Minimal score display: single number, centered, white, monospaced font
         this.ctx.save();
