@@ -2976,6 +2976,30 @@ class GameEngine {
             this.ctx.fillText(`Best Combo: ${this.bestComboThisGame}`, GAME_WIDTH / 2, 390);
         }
         
+        // Top 3 Scores
+        if (this.topScores && this.topScores.length > 0) {
+            this.ctx.fillStyle = '#fff';
+            this.ctx.font = '24px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText('Top Scores:', GAME_WIDTH / 2, 450);
+            
+            let y = 485;
+            const maxDisplay = Math.min(this.topScores.length, 3);
+            for (let i = 0; i < maxDisplay; i++) {
+                const scoreData = this.topScores[i];
+                // Safety check: ensure scoreData exists and has score property
+                if (!scoreData || typeof scoreData.score !== 'number') {
+                    continue;
+                }
+                const rank = i + 1;
+                const scoreText = `${rank}. ${scoreData.score.toLocaleString()}`;
+                this.ctx.fillStyle = rank === 1 ? '#ffd700' : '#aaa';
+                this.ctx.font = '20px Arial';
+                this.ctx.fillText(scoreText, GAME_WIDTH / 2, y);
+                y += 30;
+            }
+        }
+        
         // RETRY button (green, large)
         const retryButton = this.getRetryButtonBounds();
         const retryHovered = this.isButtonHovered(retryButton);
@@ -3348,54 +3372,7 @@ class GameEngine {
         const resetHovered = this.isButtonHovered(resetButton);
         this.drawButton(resetButton, 'RESET ALL DATA', '#f00', resetHovered);
         
-        // Top 10 Scores Leaderboard
-        if (this.topScores && this.topScores.length > 0) {
-            this.ctx.fillStyle = '#fff';
-            this.ctx.font = '24px Arial';
-            this.ctx.textAlign = 'center';
-            this.ctx.fillText('Top Scores:', GAME_WIDTH / 2, 650);
-            
-            let y = 685;
-            const maxDisplay = Math.min(this.topScores.length, 10);
-            for (let i = 0; i < maxDisplay; i++) {
-                const scoreData = this.topScores[i];
-                // Safety check: ensure scoreData exists and has score property
-                if (!scoreData || typeof scoreData.score !== 'number') {
-                    continue;
-                }
-                const rank = i + 1;
-                const scoreText = `${rank}. ${scoreData.score.toLocaleString()}`;
-                this.ctx.fillStyle = rank === 1 ? '#ffd700' : '#aaa';
-                this.ctx.font = '18px Arial';
-                this.ctx.fillText(scoreText, GAME_WIDTH / 2, y);
-                y += 25;
-            }
-        }
-        
-        // Player Stats (positioned above back button to avoid overlap)
-        if (this.playerStats) {
-            this.ctx.fillStyle = '#fff';
-            this.ctx.font = '24px Arial';
-            this.ctx.textAlign = 'center';
-            this.ctx.fillText('Stats:', GAME_WIDTH / 2, 850);
-            
-            const statsText = [
-                `Games: ${this.playerStats.totalGamesPlayed}`,
-                `Best Combo: ${this.playerStats.bestCombo}`,
-                `Avg Score: ${this.playerStats.averageScore.toLocaleString()}`,
-                `Playtime: ${Math.floor(this.playerStats.totalPlaytime / 60)}m`
-            ];
-            
-            let y = 885;
-            for (const text of statsText) {
-                this.ctx.fillStyle = '#aaa';
-                this.ctx.font = '18px Arial';
-                this.ctx.fillText(text, GAME_WIDTH / 2, y);
-                y += 25;
-            }
-        }
-        
-        // Achievements display (positioned above stats to avoid overlap)
+        // Achievements display
         if (this.achievements.length > 0) {
             this.ctx.fillStyle = '#fff';
             this.ctx.font = '24px Arial';
